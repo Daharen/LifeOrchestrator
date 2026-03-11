@@ -73,6 +73,14 @@ std::string to_string(EventCategory value) {
         case EventCategory::DispatchCompleted: return "DispatchCompleted";
         case EventCategory::DispatchFailed: return "DispatchFailed";
         case EventCategory::RiskCheckPerformed: return "RiskCheckPerformed";
+        case EventCategory::MemoryWriteStarted: return "MemoryWriteStarted";
+        case EventCategory::MemoryWriteCompleted: return "MemoryWriteCompleted";
+        case EventCategory::MemoryWriteFailed: return "MemoryWriteFailed";
+        case EventCategory::MemoryReadPerformed: return "MemoryReadPerformed";
+        case EventCategory::MemoryQueryPerformed: return "MemoryQueryPerformed";
+        case EventCategory::MemoryLoadStarted: return "MemoryLoadStarted";
+        case EventCategory::MemoryLoadCompleted: return "MemoryLoadCompleted";
+        case EventCategory::MemoryLoadFailed: return "MemoryLoadFailed";
     }
     return "Unknown";
 }

@@ -9,8 +9,16 @@ enable_testing()
 
 add_library(lifeorchestrator_core
     src/core/contracts.cpp
+    src/core/memory.cpp
+    src/core/memory_service.cpp
 )
 target_include_directories(lifeorchestrator_core PUBLIC src)
+
+add_library(lifeorchestrator_integration
+    src/integration/integration_configuration_repository.cpp
+)
+target_include_directories(lifeorchestrator_integration PUBLIC src)
+target_link_libraries(lifeorchestrator_integration PUBLIC lifeorchestrator_core)
 
 add_library(lifeorchestrator_control_plane
     src/control_plane/module_registry.cpp
@@ -27,6 +35,6 @@ target_link_libraries(control_plane_smoke PRIVATE lifeorchestrator_control_plane
 add_executable(lifeorchestrator_tests
     tests/test_main.cpp
 )
-target_link_libraries(lifeorchestrator_tests PRIVATE lifeorchestrator_control_plane)
+target_link_libraries(lifeorchestrator_tests PRIVATE lifeorchestrator_control_plane lifeorchestrator_integration)
 
 add_test(NAME lifeorchestrator_tests COMMAND lifeorchestrator_tests)
