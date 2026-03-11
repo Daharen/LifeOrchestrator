@@ -41,7 +41,15 @@ enum class EventCategory {
     DispatchStarted,
     DispatchCompleted,
     DispatchFailed,
-    RiskCheckPerformed
+    RiskCheckPerformed,
+    MemoryWriteStarted,
+    MemoryWriteCompleted,
+    MemoryWriteFailed,
+    MemoryReadPerformed,
+    MemoryQueryPerformed,
+    MemoryLoadStarted,
+    MemoryLoadCompleted,
+    MemoryLoadFailed
 };
 
 using ModuleId = std::string;
