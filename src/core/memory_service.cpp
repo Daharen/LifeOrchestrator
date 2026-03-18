@@ -4,6 +4,9 @@ namespace life_orchestrator::core {
 
 MemoryService::MemoryService(IMemoryStore& store) : store_(store) {}
 
+IMemoryStore& MemoryService::store() { return store_; }
+const IMemoryStore& MemoryService::store() const { return store_; }
+
 MemoryResult MemoryService::log_module_execution_episode(const SourceModuleId& source_module_id,
                                                          const std::string& event_type,
                                                          const std::string& summary,
@@ -18,5 +21,22 @@ MemoryResult MemoryService::log_module_execution_episode(const SourceModuleId& s
                                 .version = 1};
     return store_.append_episodic_record(record);
 }
+
+MemoryResult MemoryService::upsert_scheduled_commitment(const ScheduledCommitment& record) { return store_.upsert_scheduled_commitment(record); }
+MemoryResult MemoryService::append_task_candidate(const SchedulingTaskCandidate& record) { return store_.append_task_candidate(record); }
+MemoryResult MemoryService::upsert_availability_window(const AvailabilityWindow& record) { return store_.upsert_availability_window(record); }
+MemoryResult MemoryService::upsert_constraint_set(const SchedulingConstraintSet& record) { return store_.upsert_constraint_set(record); }
+MemoryResult MemoryService::append_proposal(const SchedulingProposal& record) { return store_.append_proposal(record); }
+MemoryResult MemoryService::append_decision(const SchedulingDecisionRecord& record) { return store_.append_decision(record); }
+MemoryResult MemoryService::append_conflict(const SchedulingConflict& record) { return store_.append_conflict(record); }
+MemoryResultWith<std::vector<ScheduledCommitment>> MemoryService::list_commitments_in_window(const TimestampString& start_time, const TimestampString& end_time) const { return store_.list_commitments_in_window(start_time, end_time); }
+MemoryResultWith<std::vector<SchedulingTaskCandidate>> MemoryService::list_task_candidates_by_status_and_range(ScheduleStatus status, const TimestampString& start_time, const TimestampString& end_time) const { return store_.list_task_candidates_by_status_and_range(status, start_time, end_time); }
+MemoryResultWith<std::vector<AvailabilityWindow>> MemoryService::list_availability_windows_in_window(const TimestampString& start_time, const TimestampString& end_time) const { return store_.list_availability_windows_in_window(start_time, end_time); }
+MemoryResultWith<std::vector<SchedulingProposal>> MemoryService::list_proposals_for_task_candidate(const ScheduleItemId& task_candidate_id) const { return store_.list_proposals_for_task_candidate(task_candidate_id); }
+MemoryResultWith<std::vector<SchedulingConflict>> MemoryService::list_conflicts(const TimestampString& start_time, const TimestampString& end_time, const std::optional<ScheduleItemId>& schedule_item_id) const { return store_.list_conflicts(start_time, end_time, schedule_item_id); }
+MemoryResultWith<SchedulingProposal> MemoryService::get_proposal_by_id(const ProposalId& proposal_id) const { return store_.get_proposal_by_id(proposal_id); }
+MemoryResultWith<ScheduledCommitment> MemoryService::get_commitment_by_id(const ScheduleItemId& commitment_id) const { return store_.get_commitment_by_id(commitment_id); }
+MemoryResultWith<SchedulingTaskCandidate> MemoryService::get_task_candidate_by_id(const ScheduleItemId& task_candidate_id) const { return store_.get_task_candidate_by_id(task_candidate_id); }
+MemoryResultWith<SchedulingConstraintSet> MemoryService::get_constraint_set_by_id(const ConstraintSetId& constraint_set_id) const { return store_.get_constraint_set_by_id(constraint_set_id); }
 
 }  // namespace life_orchestrator::core
