@@ -1,6 +1,7 @@
 #pragma once
 
 #include "control_plane/event_logger.hpp"
+#include "core/behavioral.hpp"
 #include "core/contracts.hpp"
 
 #include <cstddef>
@@ -43,7 +44,8 @@ enum class MemoryLayer {
     BehavioralHistory,
     KnowledgeRetrievalIndex,
     IntegrationConfiguration,
-    Scheduling
+    Scheduling,
+    BehavioralTriage
 };
 
 enum class EntityType {
@@ -218,6 +220,11 @@ struct MemorySummary {
     std::size_t scheduling_proposal_count;
     std::size_t scheduling_decision_count;
     std::size_t scheduling_conflict_count;
+    std::size_t behavioral_proposal_count;
+    std::size_t behavioral_state_snapshot_count;
+    std::size_t behavioral_decision_count;
+    std::size_t behavioral_backlog_count;
+    std::size_t behavioral_intervention_count;
 };
 
 struct MemoryRecordView {
@@ -246,6 +253,11 @@ public:
     virtual MemoryResult append_proposal(const SchedulingProposal& record) = 0;
     virtual MemoryResult append_decision(const SchedulingDecisionRecord& record) = 0;
     virtual MemoryResult append_conflict(const SchedulingConflict& record) = 0;
+    virtual MemoryResult append_behavioral_proposal(const BehavioralProposal& record) = 0;
+    virtual MemoryResult append_behavioral_state_snapshot(const BehavioralStateSnapshot& record) = 0;
+    virtual MemoryResult append_behavioral_decision(const BehavioralTriageDecision& record) = 0;
+    virtual MemoryResult upsert_behavioral_backlog_item(const BehavioralBacklogItem& record) = 0;
+    virtual MemoryResult append_behavioral_intervention(const BehavioralInterventionRecord& record) = 0;
 
     virtual MemoryResultWith<LifeEntity> get_entity_by_id(const EntityId& entity_id) const = 0;
     virtual MemoryResultWith<std::vector<LifeEntity>> list_entities_by_type(EntityType type) const = 0;
@@ -268,6 +280,14 @@ public:
     virtual MemoryResultWith<ScheduledCommitment> get_commitment_by_id(const ScheduleItemId& commitment_id) const = 0;
     virtual MemoryResultWith<SchedulingTaskCandidate> get_task_candidate_by_id(const ScheduleItemId& task_candidate_id) const = 0;
     virtual MemoryResultWith<SchedulingConstraintSet> get_constraint_set_by_id(const ConstraintSetId& constraint_set_id) const = 0;
+    virtual MemoryResultWith<std::vector<BehavioralProposal>> list_behavioral_proposals() const = 0;
+    virtual MemoryResultWith<std::vector<BehavioralStateSnapshot>> list_recent_behavioral_state_snapshots(std::size_t max_records) const = 0;
+    virtual MemoryResultWith<std::vector<BehavioralBacklogItem>> list_behavioral_backlog_items() const = 0;
+    virtual MemoryResultWith<std::vector<BehavioralInterventionRecord>> list_behavioral_interventions(const std::string& status_filter, const std::optional<TimestampString>& due_by) const = 0;
+    virtual MemoryResultWith<BehavioralProposal> get_behavioral_proposal_by_id(const BehavioralProposalId& proposal_id) const = 0;
+    virtual MemoryResultWith<BehavioralTriageDecision> get_behavioral_decision_by_id(const BehavioralDecisionId& decision_id) const = 0;
+    virtual MemoryResultWith<BehavioralBacklogItem> get_behavioral_backlog_item_by_proposal_id(const BehavioralProposalId& proposal_id) const = 0;
+    virtual MemoryResultWith<BehavioralMemorySummary> get_behavioral_memory_summary() const = 0;
 
     virtual MemoryResult load_from_disk() = 0;
     virtual MemoryResult persist_to_disk() = 0;
@@ -293,6 +313,11 @@ public:
     MemoryResult append_proposal(const SchedulingProposal& record) override;
     MemoryResult append_decision(const SchedulingDecisionRecord& record) override;
     MemoryResult append_conflict(const SchedulingConflict& record) override;
+    MemoryResult append_behavioral_proposal(const BehavioralProposal& record) override;
+    MemoryResult append_behavioral_state_snapshot(const BehavioralStateSnapshot& record) override;
+    MemoryResult append_behavioral_decision(const BehavioralTriageDecision& record) override;
+    MemoryResult upsert_behavioral_backlog_item(const BehavioralBacklogItem& record) override;
+    MemoryResult append_behavioral_intervention(const BehavioralInterventionRecord& record) override;
 
     MemoryResultWith<LifeEntity> get_entity_by_id(const EntityId& entity_id) const override;
     MemoryResultWith<std::vector<LifeEntity>> list_entities_by_type(EntityType type) const override;
@@ -315,6 +340,14 @@ public:
     MemoryResultWith<ScheduledCommitment> get_commitment_by_id(const ScheduleItemId& commitment_id) const override;
     MemoryResultWith<SchedulingTaskCandidate> get_task_candidate_by_id(const ScheduleItemId& task_candidate_id) const override;
     MemoryResultWith<SchedulingConstraintSet> get_constraint_set_by_id(const ConstraintSetId& constraint_set_id) const override;
+    MemoryResultWith<std::vector<BehavioralProposal>> list_behavioral_proposals() const override;
+    MemoryResultWith<std::vector<BehavioralStateSnapshot>> list_recent_behavioral_state_snapshots(std::size_t max_records) const override;
+    MemoryResultWith<std::vector<BehavioralBacklogItem>> list_behavioral_backlog_items() const override;
+    MemoryResultWith<std::vector<BehavioralInterventionRecord>> list_behavioral_interventions(const std::string& status_filter, const std::optional<TimestampString>& due_by) const override;
+    MemoryResultWith<BehavioralProposal> get_behavioral_proposal_by_id(const BehavioralProposalId& proposal_id) const override;
+    MemoryResultWith<BehavioralTriageDecision> get_behavioral_decision_by_id(const BehavioralDecisionId& decision_id) const override;
+    MemoryResultWith<BehavioralBacklogItem> get_behavioral_backlog_item_by_proposal_id(const BehavioralProposalId& proposal_id) const override;
+    MemoryResultWith<BehavioralMemorySummary> get_behavioral_memory_summary() const override;
 
     MemoryResult load_from_disk() override;
     MemoryResult persist_to_disk() override;
@@ -337,6 +370,12 @@ private:
     std::unordered_map<ProposalId, SchedulingProposal> proposals_by_id_;
     std::unordered_map<ScheduleDecisionId, SchedulingDecisionRecord> decisions_by_id_;
     std::unordered_map<std::string, SchedulingConflict> conflicts_by_id_;
+    std::unordered_map<BehavioralProposalId, BehavioralProposal> behavioral_proposals_by_id_;
+    std::unordered_map<BehavioralStateSnapshotId, BehavioralStateSnapshot> behavioral_state_snapshots_by_id_;
+    std::unordered_map<BehavioralDecisionId, BehavioralTriageDecision> behavioral_decisions_by_id_;
+    std::unordered_map<BacklogItemId, BehavioralBacklogItem> behavioral_backlog_items_by_id_;
+    std::unordered_map<BehavioralProposalId, BacklogItemId> behavioral_backlog_item_id_by_proposal_id_;
+    std::unordered_map<InterventionId, BehavioralInterventionRecord> behavioral_interventions_by_id_;
     std::vector<EpisodicMemoryRecord> episodic_records_;
     std::vector<BehavioralHistoryRecord> behavioral_history_records_;
 
