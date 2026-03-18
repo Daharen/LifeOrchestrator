@@ -24,7 +24,8 @@ add_library(lifeorchestrator_control_plane
     src/control_plane/module_registry.cpp
     src/control_plane/event_logger.cpp
     src/control_plane/control_plane.cpp
-    src/coordination/scheduling_coordination_stub_module.cpp
+    src/coordination/scheduling_engine.cpp
+    src/coordination/scheduling_coordination_module.cpp
 )
 target_include_directories(lifeorchestrator_control_plane PUBLIC src)
 target_link_libraries(lifeorchestrator_control_plane PUBLIC lifeorchestrator_core)

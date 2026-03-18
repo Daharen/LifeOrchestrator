@@ -11,7 +11,6 @@ namespace {
 
 std::string escape(const std::string& value) {
     std::string result;
-    result.reserve(value.size());
     for (char ch : value) {
         if (ch == '\\' || ch == ';' || ch == '|' || ch == '=') {
             result.push_back('\\');
@@ -23,7 +22,6 @@ std::string escape(const std::string& value) {
 
 std::string unescape(const std::string& value) {
     std::string result;
-    result.reserve(value.size());
     bool escaped = false;
     for (char ch : value) {
         if (escaped) {
@@ -67,32 +65,22 @@ std::vector<std::string> split_escaped(const std::string& input, char delimiter)
 
 std::string serialize_map(const StringMap& map) {
     std::vector<std::pair<std::string, std::string>> ordered(map.begin(), map.end());
-    std::sort(ordered.begin(), ordered.end(), [](const auto& lhs, const auto& rhs) { return lhs.first < rhs.first; });
+    std::sort(ordered.begin(), ordered.end());
     std::ostringstream out;
-    bool first = true;
-    for (const auto& [key, value] : ordered) {
-        if (!first) {
-            out << '|';
-        }
-        first = false;
-        out << escape(key) << '=' << escape(value);
+    for (std::size_t i = 0; i < ordered.size(); ++i) {
+        if (i > 0) out << '|';
+        out << escape(ordered[i].first) << '=' << escape(ordered[i].second);
     }
     return out.str();
 }
 
 StringMap parse_map(const std::string& raw) {
+    if (raw.empty()) return {};
     StringMap result;
-    if (raw.empty()) {
-        return result;
-    }
     for (const auto& pair : split_escaped(raw, '|')) {
         const auto pos = pair.find('=');
-        if (pos == std::string::npos) {
-            throw std::runtime_error("map pair missing '='");
-        }
-        const auto key = unescape(pair.substr(0, pos));
-        const auto value = unescape(pair.substr(pos + 1));
-        result[key] = value;
+        if (pos == std::string::npos) throw std::runtime_error("map pair missing '='");
+        result[unescape(pair.substr(0, pos))] = unescape(pair.substr(pos + 1));
     }
     return result;
 }
@@ -100,37 +88,76 @@ StringMap parse_map(const std::string& raw) {
 std::string serialize_list(const std::vector<std::string>& values) {
     std::ostringstream out;
     for (std::size_t i = 0; i < values.size(); ++i) {
-        if (i > 0) {
-            out << '|';
-        }
+        if (i > 0) out << '|';
         out << escape(values[i]);
     }
     return out.str();
 }
 
 std::vector<std::string> parse_list(const std::string& raw) {
-    if (raw.empty()) {
-        return {};
-    }
+    if (raw.empty()) return {};
     auto parts = split_escaped(raw, '|');
-    for (auto& part : parts) {
-        part = unescape(part);
-    }
+    for (auto& part : parts) part = unescape(part);
     return parts;
+}
+
+std::string serialize_fields(const std::vector<std::pair<std::string, std::string>>& fields) {
+    std::ostringstream out;
+    for (std::size_t i = 0; i < fields.size(); ++i) {
+        if (i > 0) out << ';';
+        out << fields[i].first << '=' << escape(fields[i].second);
+    }
+    return out.str();
+}
+
+StringMap parse_fields(const std::string& line) {
+    StringMap fields;
+    for (const auto& token : split_escaped(line, ';')) {
+        const auto pos = token.find('=');
+        if (pos == std::string::npos) throw std::runtime_error("field missing '='");
+        fields[token.substr(0, pos)] = unescape(token.substr(pos + 1));
+    }
+    return fields;
+}
+
+void ensure_parent(const std::filesystem::path& path) {
+    if (path.has_parent_path()) std::filesystem::create_directories(path.parent_path());
+}
+
+void append_line(const std::filesystem::path& path, const std::string& line) {
+    ensure_parent(path);
+    std::ofstream out(path, std::ios::app);
+    if (!out.is_open()) throw std::runtime_error("unable to open file for append: " + path.string());
+    out << line << '\n';
+}
+
+std::vector<std::string> read_lines(const std::filesystem::path& path) {
+    std::vector<std::string> lines;
+    std::ifstream in(path);
+    std::string line;
+    while (std::getline(in, line)) {
+        if (!line.empty()) lines.push_back(line);
+    }
+    return lines;
 }
 
 template <typename T>
 MemoryResultWith<T> success(T value) {
     return {true, "ok", std::move(value)};
 }
-
 MemoryResult ok_result() { return {true, "ok"}; }
-
 MemoryResult error_result(std::string message) { return {false, std::move(message)}; }
-
 template <typename T>
 MemoryResultWith<T> error_with(std::string message) {
     return {false, std::move(message), std::nullopt};
+}
+
+bool overlaps(const TimestampString& start_a, const TimestampString& end_a, const TimestampString& start_b, const TimestampString& end_b) {
+    return start_a < end_b && start_b < end_a;
+}
+
+bool in_window(const TimestampString& start_a, const TimestampString& end_a, const TimestampString& window_start, const TimestampString& window_end) {
+    return overlaps(start_a, end_a, window_start, window_end);
 }
 
 std::filesystem::path layer_file(const std::filesystem::path& root, MemoryLayer layer) {
@@ -142,77 +169,18 @@ std::filesystem::path layer_file(const std::filesystem::path& root, MemoryLayer 
         case MemoryLayer::ProjectMemory: return root / "memory/project_memory/records.ndjson";
         case MemoryLayer::BehavioralHistory: return root / "memory/behavioral_history/records.ndjson";
         case MemoryLayer::KnowledgeRetrievalIndex: return root / "memory/retrieval_index/records.ndjson";
-        case MemoryLayer::IntegrationConfiguration:
-            return root / "memory/integration_configuration/records.ndjson";
+        case MemoryLayer::IntegrationConfiguration: return root / "memory/integration_configuration/records.ndjson";
+        case MemoryLayer::Scheduling: return root / "memory/scheduling/summary.ndjson";
     }
     return root / "memory/unknown.ndjson";
 }
 
-std::filesystem::path relationship_file(const std::filesystem::path& root) {
-    return root / "memory/life_graph/relationships.ndjson";
+std::filesystem::path scheduling_file(const std::filesystem::path& root, const std::string& name) {
+    return root / ("memory/scheduling/" + name + ".ndjson");
 }
 
-std::filesystem::path manifest_file(const std::filesystem::path& root) {
-    return root / "memory/metadata/store_manifest.json";
-}
-
-void ensure_parent(const std::filesystem::path& p) {
-    if (p.has_parent_path()) {
-        std::filesystem::create_directories(p.parent_path());
-    }
-}
-
-void append_line(const std::filesystem::path& path, const std::string& line) {
-    ensure_parent(path);
-    std::ofstream out(path, std::ios::app);
-    if (!out.is_open()) {
-        throw std::runtime_error("unable to open file for append: " + path.string());
-    }
-    out << line << '\n';
-    if (!out.good()) {
-        throw std::runtime_error("failed writing file: " + path.string());
-    }
-}
-
-std::vector<std::string> read_lines(const std::filesystem::path& path) {
-    std::vector<std::string> lines;
-    std::ifstream in(path);
-    if (!in.is_open()) {
-        return lines;
-    }
-    std::string line;
-    while (std::getline(in, line)) {
-        if (!line.empty()) {
-            lines.push_back(line);
-        }
-    }
-    return lines;
-}
-
-std::string serialize_fields(const std::vector<std::pair<std::string, std::string>>& fields) {
-    std::ostringstream out;
-    bool first = true;
-    for (const auto& [key, value] : fields) {
-        if (!first) {
-            out << ';';
-        }
-        first = false;
-        out << key << '=' << escape(value);
-    }
-    return out.str();
-}
-
-StringMap parse_fields(const std::string& line) {
-    StringMap fields;
-    for (const auto& token : split_escaped(line, ';')) {
-        const auto pos = token.find('=');
-        if (pos == std::string::npos) {
-            throw std::runtime_error("field missing '='");
-        }
-        fields[token.substr(0, pos)] = unescape(token.substr(pos + 1));
-    }
-    return fields;
-}
+std::filesystem::path relationship_file(const std::filesystem::path& root) { return root / "memory/life_graph/relationships.ndjson"; }
+std::filesystem::path manifest_file(const std::filesystem::path& root) { return root / "memory/metadata/store_manifest.json"; }
 
 EntityType parse_entity_type(const std::string& value) {
     if (value == "Goal") return EntityType::Goal;
@@ -228,7 +196,6 @@ EntityType parse_entity_type(const std::string& value) {
     if (value == "Preference") return EntityType::Preference;
     return EntityType::Integration;
 }
-
 RelationshipType parse_relationship_type(const std::string& value) {
     if (value == "Supports") return RelationshipType::Supports;
     if (value == "Contains") return RelationshipType::Contains;
@@ -239,18 +206,43 @@ RelationshipType parse_relationship_type(const std::string& value) {
     if (value == "OwnedBy") return RelationshipType::OwnedBy;
     return RelationshipType::ConfiguredBy;
 }
-
 IntegrationStatus parse_integration_status(const std::string& value) {
     if (value == "Disabled") return IntegrationStatus::Disabled;
     if (value == "Enabled") return IntegrationStatus::Enabled;
     if (value == "Error") return IntegrationStatus::Error;
     return IntegrationStatus::Unknown;
 }
-
 CredentialStorageMode parse_storage_mode(const std::string& value) {
     if (value == "InlinePlaceholderOnly") return CredentialStorageMode::InlinePlaceholderOnly;
     if (value == "ExternalSecretReference") return CredentialStorageMode::ExternalSecretReference;
     return CredentialStorageMode::Unset;
+}
+ScheduleStatus parse_schedule_status(const std::string& value) {
+    if (value == "Pending") return ScheduleStatus::Pending;
+    if (value == "Scheduled") return ScheduleStatus::Scheduled;
+    if (value == "Completed") return ScheduleStatus::Completed;
+    if (value == "Cancelled") return ScheduleStatus::Cancelled;
+    return ScheduleStatus::Rejected;
+}
+SchedulingPriority parse_priority(const std::string& value) {
+    if (value == "Low") return SchedulingPriority::Low;
+    if (value == "High") return SchedulingPriority::High;
+    if (value == "Critical") return SchedulingPriority::Critical;
+    return SchedulingPriority::Normal;
+}
+ProposalStatus parse_proposal_status(const std::string& value) {
+    if (value == "Accepted") return ProposalStatus::Accepted;
+    if (value == "Rejected") return ProposalStatus::Rejected;
+    if (value == "Expired") return ProposalStatus::Expired;
+    if (value == "Committed") return ProposalStatus::Committed;
+    return ProposalStatus::Proposed;
+}
+ConflictType parse_conflict_type(const std::string& value) {
+    if (value == "Overlap") return ConflictType::Overlap;
+    if (value == "OutsideAvailability") return ConflictType::OutsideAvailability;
+    if (value == "DurationInsufficient") return ConflictType::DurationInsufficient;
+    if (value == "DependencyViolation") return ConflictType::DependencyViolation;
+    return ConflictType::InvalidWindow;
 }
 
 }  // namespace
@@ -264,653 +256,115 @@ void FileMemoryStore::emit_memory_event(EventCategory category,
                                         MemoryOperationType operation,
                                         const SourceModuleId& source_module_id,
                                         const std::string& message) const {
-    if (event_logger_ == nullptr) {
-        return;
-    }
-
-    event_logger_->append(StructuredEvent{.category = category,
-                                          .occurred_at = current_timestamp_utc(),
-                                          .request_id = "memory",
-                                          .module_id = source_module_id,
-                                          .capability_id = "memory.store",
-                                          .message = message,
-                                          .fields = {{"layer", to_string(layer)},
-                                                     {"record_id", record_id},
-                                                     {"operation", to_string(operation)}}});
+    if (!event_logger_) return;
+    event_logger_->append({category,
+                           current_timestamp_utc(),
+                           "memory",
+                           source_module_id,
+                           "memory.store",
+                           message,
+                           {{"layer", to_string(layer)}, {"record_id", record_id}, {"operation", to_string(operation)}}});
 }
 
 MemoryResult FileMemoryStore::upsert_life_entity(const LifeEntity& entity) {
-    emit_memory_event(EventCategory::MemoryWriteStarted,
-                      MemoryLayer::LifeModelGraph,
-                      entity.entity_id,
-                      MemoryOperationType::Upsert,
-                      entity.source_module_id,
-                      "Life entity write started.");
     try {
         entities_by_id_[entity.entity_id] = entity;
-        append_line(layer_file(data_root_, MemoryLayer::LifeModelGraph),
-                    serialize_fields({{"record_kind", "life_entity"},
-                                      {"entity_id", entity.entity_id},
-                                      {"entity_type", to_string(entity.entity_type)},
-                                      {"display_name", entity.display_name},
-                                      {"canonical_name", entity.canonical_name},
-                                      {"description", entity.description},
-                                      {"created_at", entity.created_at},
-                                      {"updated_at", entity.updated_at},
-                                      {"source_module_id", entity.source_module_id},
-                                      {"version", std::to_string(entity.version)},
-                                      {"archived", entity.archived ? "1" : "0"},
-                                      {"attributes", serialize_map(entity.attributes)}}));
+        append_line(layer_file(data_root_, MemoryLayer::LifeModelGraph), serialize_fields({{"record_kind", "life_entity"}, {"entity_id", entity.entity_id}, {"entity_type", to_string(entity.entity_type)}, {"display_name", entity.display_name}, {"canonical_name", entity.canonical_name}, {"description", entity.description}, {"created_at", entity.created_at}, {"updated_at", entity.updated_at}, {"source_module_id", entity.source_module_id}, {"version", std::to_string(entity.version)}, {"archived", entity.archived ? "1" : "0"}, {"attributes", serialize_map(entity.attributes)}}));
         ++snapshot_version_;
-        emit_memory_event(EventCategory::MemoryWriteCompleted,
-                          MemoryLayer::LifeModelGraph,
-                          entity.entity_id,
-                          MemoryOperationType::Upsert,
-                          entity.source_module_id,
-                          "Life entity write completed.");
+        emit_memory_event(EventCategory::MemoryWriteCompleted, MemoryLayer::LifeModelGraph, entity.entity_id, MemoryOperationType::Upsert, entity.source_module_id, "Life entity write completed.");
         return ok_result();
-    } catch (const std::exception& e) {
-        emit_memory_event(EventCategory::MemoryWriteFailed,
-                          MemoryLayer::LifeModelGraph,
-                          entity.entity_id,
-                          MemoryOperationType::Upsert,
-                          entity.source_module_id,
-                          e.what());
-        return error_result(e.what());
-    }
+    } catch (const std::exception& e) { return error_result(e.what()); }
 }
-
 MemoryResult FileMemoryStore::upsert_life_relationship(const LifeRelationship& relationship) {
-    emit_memory_event(EventCategory::MemoryWriteStarted,
-                      MemoryLayer::LifeModelGraph,
-                      relationship.relationship_id,
-                      MemoryOperationType::Upsert,
-                      relationship.source_module_id,
-                      "Life relationship write started.");
     try {
         relationships_by_id_[relationship.relationship_id] = relationship;
-        append_line(relationship_file(data_root_),
-                    serialize_fields({{"record_kind", "life_relationship"},
-                                      {"relationship_id", relationship.relationship_id},
-                                      {"from_entity_id", relationship.from_entity_id},
-                                      {"to_entity_id", relationship.to_entity_id},
-                                      {"relationship_type", to_string(relationship.relationship_type)},
-                                      {"created_at", relationship.created_at},
-                                      {"updated_at", relationship.updated_at},
-                                      {"source_module_id", relationship.source_module_id},
-                                      {"version", std::to_string(relationship.version)},
-                                      {"attributes", serialize_map(relationship.attributes)}}));
+        append_line(relationship_file(data_root_), serialize_fields({{"record_kind", "life_relationship"}, {"relationship_id", relationship.relationship_id}, {"from_entity_id", relationship.from_entity_id}, {"to_entity_id", relationship.to_entity_id}, {"relationship_type", to_string(relationship.relationship_type)}, {"created_at", relationship.created_at}, {"updated_at", relationship.updated_at}, {"source_module_id", relationship.source_module_id}, {"version", std::to_string(relationship.version)}, {"attributes", serialize_map(relationship.attributes)}}));
         ++snapshot_version_;
-        emit_memory_event(EventCategory::MemoryWriteCompleted,
-                          MemoryLayer::LifeModelGraph,
-                          relationship.relationship_id,
-                          MemoryOperationType::Upsert,
-                          relationship.source_module_id,
-                          "Life relationship write completed.");
         return ok_result();
-    } catch (const std::exception& e) {
-        emit_memory_event(EventCategory::MemoryWriteFailed,
-                          MemoryLayer::LifeModelGraph,
-                          relationship.relationship_id,
-                          MemoryOperationType::Upsert,
-                          relationship.source_module_id,
-                          e.what());
-        return error_result(e.what());
-    }
+    } catch (const std::exception& e) { return error_result(e.what()); }
 }
-
 MemoryResult FileMemoryStore::append_episodic_record(const EpisodicMemoryRecord& record) {
-    emit_memory_event(EventCategory::MemoryWriteStarted,
-                      MemoryLayer::EpisodicMemory,
-                      record.record_id,
-                      MemoryOperationType::Insert,
-                      record.source_module_id,
-                      "Episodic write started.");
     try {
         episodic_records_.push_back(record);
-        append_line(layer_file(data_root_, MemoryLayer::EpisodicMemory),
-                    serialize_fields({{"record_id", record.record_id},
-                                      {"timestamp", record.timestamp},
-                                      {"event_type", record.event_type},
-                                      {"source_module_id", record.source_module_id},
-                                      {"associated_entity_ids", serialize_list(record.associated_entity_ids)},
-                                      {"summary", record.summary},
-                                      {"details", serialize_map(record.details)},
-                                      {"version", std::to_string(record.version)}}));
-        emit_memory_event(EventCategory::MemoryWriteCompleted,
-                          MemoryLayer::EpisodicMemory,
-                          record.record_id,
-                          MemoryOperationType::Insert,
-                          record.source_module_id,
-                          "Episodic write completed.");
+        append_line(layer_file(data_root_, MemoryLayer::EpisodicMemory), serialize_fields({{"record_id", record.record_id}, {"timestamp", record.timestamp}, {"event_type", record.event_type}, {"source_module_id", record.source_module_id}, {"associated_entity_ids", serialize_list(record.associated_entity_ids)}, {"summary", record.summary}, {"details", serialize_map(record.details)}, {"version", std::to_string(record.version)}}));
+        emit_memory_event(EventCategory::MemoryWriteCompleted, MemoryLayer::EpisodicMemory, record.record_id, MemoryOperationType::Insert, record.source_module_id, "Episodic write completed.");
         return ok_result();
-    } catch (const std::exception& e) {
-        emit_memory_event(EventCategory::MemoryWriteFailed,
-                          MemoryLayer::EpisodicMemory,
-                          record.record_id,
-                          MemoryOperationType::Insert,
-                          record.source_module_id,
-                          e.what());
-        return error_result(e.what());
-    }
+    } catch (const std::exception& e) { return error_result(e.what()); }
 }
+MemoryResult FileMemoryStore::upsert_preference_record(const PreferenceRecord& record) { try { preferences_by_id_[record.record_id] = record; append_line(layer_file(data_root_, MemoryLayer::PreferenceMemory), serialize_fields({{"record_id", record.record_id}, {"preference_key", record.preference_key}, {"value", record.value}, {"confidence", std::to_string(record.confidence)}, {"source_module_id", record.source_module_id}, {"created_at", record.created_at}, {"updated_at", record.updated_at}, {"version", std::to_string(record.version)}})); return ok_result(); } catch (const std::exception& e) { return error_result(e.what()); } }
+MemoryResult FileMemoryStore::upsert_relationship_memory_record(const RelationshipMemoryRecord& record) { try { relationship_memory_by_id_[record.record_id] = record; append_line(layer_file(data_root_, MemoryLayer::RelationshipMemory), serialize_fields({{"record_id", record.record_id}, {"related_person_entity_id", record.related_person_entity_id}, {"communication_cadence", record.communication_cadence}, {"important_dates", serialize_list(record.important_dates)}, {"shared_interests", serialize_list(record.shared_interests)}, {"notes", record.notes}, {"source_module_id", record.source_module_id}, {"created_at", record.created_at}, {"updated_at", record.updated_at}, {"version", std::to_string(record.version)}})); return ok_result(); } catch (const std::exception& e) { return error_result(e.what()); } }
+MemoryResult FileMemoryStore::upsert_project_memory_record(const ProjectMemoryRecord& record) { try { project_memory_by_id_[record.record_id] = record; append_line(layer_file(data_root_, MemoryLayer::ProjectMemory), serialize_fields({{"record_id", record.record_id}, {"project_entity_id", record.project_entity_id}, {"objectives", serialize_list(record.objectives)}, {"milestones", serialize_list(record.milestones)}, {"active_task_ids", serialize_list(record.active_task_ids)}, {"dependency_ids", serialize_list(record.dependency_ids)}, {"progress_summary", record.progress_summary}, {"source_module_id", record.source_module_id}, {"created_at", record.created_at}, {"updated_at", record.updated_at}, {"version", std::to_string(record.version)}})); return ok_result(); } catch (const std::exception& e) { return error_result(e.what()); } }
+MemoryResult FileMemoryStore::append_behavioral_history_record(const BehavioralHistoryRecord& record) { try { behavioral_history_records_.push_back(record); append_line(layer_file(data_root_, MemoryLayer::BehavioralHistory), serialize_fields({{"record_id", record.record_id}, {"subject_key", record.subject_key}, {"record_type", record.record_type}, {"completion_state", record.completion_state}, {"response_state", record.response_state}, {"score_or_value", record.score_or_value}, {"source_module_id", record.source_module_id}, {"timestamp", record.timestamp}, {"version", std::to_string(record.version)}})); return ok_result(); } catch (const std::exception& e) { return error_result(e.what()); } }
+MemoryResult FileMemoryStore::upsert_retrieval_index_record(const KnowledgeRetrievalIndexRecord& record) { try { retrieval_index_by_id_[record.record_id] = record; append_line(layer_file(data_root_, MemoryLayer::KnowledgeRetrievalIndex), serialize_fields({{"record_id", record.record_id}, {"document_id", record.document_id}, {"source_reference", record.source_reference}, {"indexing_status", record.indexing_status}, {"metadata", serialize_map(record.metadata)}, {"source_module_id", record.source_module_id}, {"created_at", record.created_at}, {"updated_at", record.updated_at}, {"version", std::to_string(record.version)}})); return ok_result(); } catch (const std::exception& e) { return error_result(e.what()); } }
 
-MemoryResult FileMemoryStore::upsert_preference_record(const PreferenceRecord& record) {
-    try {
-        preferences_by_id_[record.record_id] = record;
-        append_line(layer_file(data_root_, MemoryLayer::PreferenceMemory),
-                    serialize_fields({{"record_id", record.record_id},
-                                      {"preference_key", record.preference_key},
-                                      {"value", record.value},
-                                      {"confidence", std::to_string(record.confidence)},
-                                      {"source_module_id", record.source_module_id},
-                                      {"created_at", record.created_at},
-                                      {"updated_at", record.updated_at},
-                                      {"version", std::to_string(record.version)}}));
-        emit_memory_event(EventCategory::MemoryWriteCompleted,
-                          MemoryLayer::PreferenceMemory,
-                          record.record_id,
-                          MemoryOperationType::Upsert,
-                          record.source_module_id,
-                          "Preference write completed.");
-        return ok_result();
-    } catch (const std::exception& e) {
-        return error_result(e.what());
-    }
-}
+MemoryResult FileMemoryStore::upsert_scheduled_commitment(const ScheduledCommitment& record) { try { commitments_by_id_[record.schedule_item_id] = record; append_line(scheduling_file(data_root_, "commitments"), serialize_fields({{"schedule_item_id", record.schedule_item_id}, {"related_entity_id", record.related_entity_id}, {"title", record.title}, {"description", record.description}, {"start_time", record.start_time}, {"end_time", record.end_time}, {"timezone", record.timezone}, {"priority", to_string(record.priority)}, {"source_module_id", record.source_module_id}, {"created_at", record.created_at}, {"updated_at", record.updated_at}, {"version", std::to_string(record.version)}, {"status", to_string(record.status)}, {"attributes", serialize_map(record.attributes)}})); emit_memory_event(EventCategory::MemoryWriteCompleted, MemoryLayer::Scheduling, record.schedule_item_id, MemoryOperationType::Upsert, record.source_module_id, "Scheduling commitment write completed."); return ok_result(); } catch (const std::exception& e) { return error_result(e.what()); } }
+MemoryResult FileMemoryStore::append_task_candidate(const SchedulingTaskCandidate& record) { try { task_candidates_by_id_[record.schedule_item_id] = record; append_line(scheduling_file(data_root_, "task_candidates"), serialize_fields({{"schedule_item_id", record.schedule_item_id}, {"related_entity_id", record.related_entity_id}, {"title", record.title}, {"description", record.description}, {"estimated_duration_minutes", std::to_string(record.estimated_duration_minutes)}, {"earliest_start", record.earliest_start}, {"latest_end", record.latest_end}, {"priority", to_string(record.priority)}, {"splittable", record.splittable ? "1" : "0"}, {"required_buffer_before_minutes", std::to_string(record.required_buffer_before_minutes)}, {"required_buffer_after_minutes", std::to_string(record.required_buffer_after_minutes)}, {"dependency_ids", serialize_list(record.dependency_ids)}, {"source_module_id", record.source_module_id}, {"created_at", record.created_at}, {"updated_at", record.updated_at}, {"version", std::to_string(record.version)}, {"status", to_string(record.status)}})); return ok_result(); } catch (const std::exception& e) { return error_result(e.what()); } }
+MemoryResult FileMemoryStore::upsert_availability_window(const AvailabilityWindow& record) { try { windows_by_id_[record.window_id] = record; append_line(scheduling_file(data_root_, "availability_windows"), serialize_fields({{"window_id", record.window_id}, {"title", record.title}, {"start_time", record.start_time}, {"end_time", record.end_time}, {"timezone", record.timezone}, {"availability_type", record.availability_type}, {"recurrence_placeholder", record.recurrence_placeholder}, {"source_module_id", record.source_module_id}, {"created_at", record.created_at}, {"updated_at", record.updated_at}, {"version", std::to_string(record.version)}})); return ok_result(); } catch (const std::exception& e) { return error_result(e.what()); } }
+MemoryResult FileMemoryStore::upsert_constraint_set(const SchedulingConstraintSet& record) { try { constraint_sets_by_id_[record.constraint_set_id] = record; append_line(scheduling_file(data_root_, "constraint_sets"), serialize_fields({{"constraint_set_id", record.constraint_set_id}, {"max_commitments_per_day", std::to_string(record.max_commitments_per_day)}, {"minimum_gap_minutes", std::to_string(record.minimum_gap_minutes)}, {"working_hours_only", record.working_hours_only ? "1" : "0"}, {"allowed_window_ids", serialize_list(record.allowed_window_ids)}, {"blocked_window_ids", serialize_list(record.blocked_window_ids)}, {"preference_tags", serialize_list(record.preference_tags)}, {"source_module_id", record.source_module_id}, {"created_at", record.created_at}, {"updated_at", record.updated_at}, {"version", std::to_string(record.version)}})); return ok_result(); } catch (const std::exception& e) { return error_result(e.what()); } }
+MemoryResult FileMemoryStore::append_proposal(const SchedulingProposal& record) { try { proposals_by_id_[record.proposal_id] = record; append_line(scheduling_file(data_root_, "proposals"), serialize_fields({{"proposal_id", record.proposal_id}, {"related_task_candidate_id", record.related_task_candidate_id}, {"proposed_start_time", record.proposed_start_time}, {"proposed_end_time", record.proposed_end_time}, {"timezone", record.timezone}, {"proposal_rank", std::to_string(record.proposal_rank)}, {"rationale", record.rationale}, {"based_on_constraint_set_id", record.based_on_constraint_set_id}, {"generated_at", record.generated_at}, {"source_module_id", record.source_module_id}, {"version", std::to_string(record.version)}, {"status", to_string(record.status)}})); return ok_result(); } catch (const std::exception& e) { return error_result(e.what()); } }
+MemoryResult FileMemoryStore::append_decision(const SchedulingDecisionRecord& record) { try { decisions_by_id_[record.decision_id] = record; append_line(scheduling_file(data_root_, "decisions"), serialize_fields({{"decision_id", record.decision_id}, {"proposal_id", record.proposal_id}, {"resulting_commitment_id", record.resulting_commitment_id}, {"decision_type", record.decision_type}, {"decided_at", record.decided_at}, {"source_module_id", record.source_module_id}, {"summary", record.summary}, {"version", std::to_string(record.version)}})); return ok_result(); } catch (const std::exception& e) { return error_result(e.what()); } }
+MemoryResult FileMemoryStore::append_conflict(const SchedulingConflict& record) { try { conflicts_by_id_[record.conflict_id] = record; append_line(scheduling_file(data_root_, "conflicts"), serialize_fields({{"conflict_id", record.conflict_id}, {"conflict_type", to_string(record.conflict_type)}, {"primary_schedule_item_id", record.primary_schedule_item_id}, {"secondary_schedule_item_id", record.secondary_schedule_item_id}, {"message", record.message}, {"detected_at", record.detected_at}, {"source_module_id", record.source_module_id}, {"fields", serialize_map(record.fields)}})); return ok_result(); } catch (const std::exception& e) { return error_result(e.what()); } }
 
-MemoryResult FileMemoryStore::upsert_relationship_memory_record(const RelationshipMemoryRecord& record) {
-    try {
-        relationship_memory_by_id_[record.record_id] = record;
-        append_line(layer_file(data_root_, MemoryLayer::RelationshipMemory),
-                    serialize_fields({{"record_id", record.record_id},
-                                      {"related_person_entity_id", record.related_person_entity_id},
-                                      {"communication_cadence", record.communication_cadence},
-                                      {"important_dates", serialize_list(record.important_dates)},
-                                      {"shared_interests", serialize_list(record.shared_interests)},
-                                      {"notes", record.notes},
-                                      {"source_module_id", record.source_module_id},
-                                      {"created_at", record.created_at},
-                                      {"updated_at", record.updated_at},
-                                      {"version", std::to_string(record.version)}}));
-        return ok_result();
-    } catch (const std::exception& e) {
-        return error_result(e.what());
-    }
-}
+MemoryResultWith<LifeEntity> FileMemoryStore::get_entity_by_id(const EntityId& entity_id) const { auto it = entities_by_id_.find(entity_id); return it == entities_by_id_.end() ? error_with<LifeEntity>("entity not found") : success(it->second); }
+MemoryResultWith<std::vector<LifeEntity>> FileMemoryStore::list_entities_by_type(EntityType type) const { std::vector<LifeEntity> out; for (const auto& [_, entity] : entities_by_id_) if (entity.entity_type == type) out.push_back(entity); std::sort(out.begin(), out.end(), [](const auto& a, const auto& b){ return a.entity_id < b.entity_id; }); return success(out); }
+MemoryResultWith<std::vector<LifeRelationship>> FileMemoryStore::get_relationships_for_entity(const EntityId& entity_id) const { std::vector<LifeRelationship> out; for (const auto& [_, rel] : relationships_by_id_) if (rel.from_entity_id == entity_id || rel.to_entity_id == entity_id) out.push_back(rel); std::sort(out.begin(), out.end(), [](const auto& a, const auto& b){ return a.relationship_id < b.relationship_id; }); return success(out); }
+MemoryResultWith<ProjectMemoryRecord> FileMemoryStore::get_project_record_by_project_entity_id(const EntityId& project_entity_id) const { for (const auto& [_, record] : project_memory_by_id_) if (record.project_entity_id == project_entity_id) return success(record); return error_with<ProjectMemoryRecord>("project record not found"); }
+MemoryResultWith<std::vector<PreferenceRecord>> FileMemoryStore::get_preferences_by_prefix_or_key(const std::string& key_or_prefix, bool exact_match) const { std::vector<PreferenceRecord> out; for (const auto& [_, rec] : preferences_by_id_) if ((exact_match && rec.preference_key == key_or_prefix) || (!exact_match && rec.preference_key.rfind(key_or_prefix,0)==0)) out.push_back(rec); std::sort(out.begin(), out.end(), [](const auto& a, const auto& b){ return a.preference_key < b.preference_key; }); return success(out); }
+MemoryResultWith<std::vector<EpisodicMemoryRecord>> FileMemoryStore::list_recent_episodic_records(std::size_t max_records) const { auto out = episodic_records_; std::sort(out.begin(), out.end(), [](const auto& a, const auto& b){ return a.timestamp > b.timestamp; }); if (out.size() > max_records) out.resize(max_records); return success(out); }
+MemoryResultWith<std::vector<BehavioralHistoryRecord>> FileMemoryStore::list_behavioral_history_for_subject(const std::string& subject_key) const { std::vector<BehavioralHistoryRecord> out; for (const auto& rec : behavioral_history_records_) if (rec.subject_key == subject_key) out.push_back(rec); std::sort(out.begin(), out.end(), [](const auto& a, const auto& b){ return a.timestamp < b.timestamp; }); return success(out); }
+MemoryResultWith<MemoryRecordView> FileMemoryStore::read_record_by_layer_and_id(MemoryLayer layer, const RecordId& id) const { if (layer == MemoryLayer::PreferenceMemory) { auto it = preferences_by_id_.find(id); if (it == preferences_by_id_.end()) return error_with<MemoryRecordView>("record not found"); return success(MemoryRecordView{layer, id, {{"preference_key", it->second.preference_key}, {"value", it->second.value}}}); } if (layer == MemoryLayer::Scheduling) { auto it = commitments_by_id_.find(id); if (it != commitments_by_id_.end()) return success(MemoryRecordView{layer, id, {{"title", it->second.title}, {"start_time", it->second.start_time}}}); } return error_with<MemoryRecordView>("layer not implemented for record read"); }
+MemoryResultWith<std::vector<MemoryRecordView>> FileMemoryStore::list_records_for_query(MemoryLayer layer, const QueryToken& token) const { std::vector<MemoryRecordView> out; if (layer == MemoryLayer::EpisodicMemory) { for (const auto& rec : episodic_records_) if (rec.event_type == token || rec.summary.find(token) != std::string::npos) out.push_back({layer, rec.record_id, {{"event_type", rec.event_type}, {"summary", rec.summary}}}); } return success(out); }
+MemoryResultWith<LifeGraphSnapshotMetadata> FileMemoryStore::get_life_graph_snapshot_metadata() const { return success(LifeGraphSnapshotMetadata{snapshot_version_, current_timestamp_utc(), "sprint3-v1", entities_by_id_.size(), relationships_by_id_.size()}); }
+MemoryResultWith<MemorySummary> FileMemoryStore::get_memory_summary() const { return success(MemorySummary{entities_by_id_.size(), relationships_by_id_.size(), episodic_records_.size(), preferences_by_id_.size(), relationship_memory_by_id_.size(), project_memory_by_id_.size(), behavioral_history_records_.size(), retrieval_index_by_id_.size(), integration_configs_by_id_.size(), commitments_by_id_.size(), task_candidates_by_id_.size(), windows_by_id_.size(), constraint_sets_by_id_.size(), proposals_by_id_.size(), decisions_by_id_.size(), conflicts_by_id_.size()}); }
 
-MemoryResult FileMemoryStore::upsert_project_memory_record(const ProjectMemoryRecord& record) {
-    try {
-        project_memory_by_id_[record.record_id] = record;
-        append_line(layer_file(data_root_, MemoryLayer::ProjectMemory),
-                    serialize_fields({{"record_id", record.record_id},
-                                      {"project_entity_id", record.project_entity_id},
-                                      {"objectives", serialize_list(record.objectives)},
-                                      {"milestones", serialize_list(record.milestones)},
-                                      {"active_task_ids", serialize_list(record.active_task_ids)},
-                                      {"dependency_ids", serialize_list(record.dependency_ids)},
-                                      {"progress_summary", record.progress_summary},
-                                      {"source_module_id", record.source_module_id},
-                                      {"created_at", record.created_at},
-                                      {"updated_at", record.updated_at},
-                                      {"version", std::to_string(record.version)}}));
-        return ok_result();
-    } catch (const std::exception& e) {
-        return error_result(e.what());
-    }
-}
-
-MemoryResult FileMemoryStore::append_behavioral_history_record(const BehavioralHistoryRecord& record) {
-    try {
-        behavioral_history_records_.push_back(record);
-        append_line(layer_file(data_root_, MemoryLayer::BehavioralHistory),
-                    serialize_fields({{"record_id", record.record_id},
-                                      {"subject_key", record.subject_key},
-                                      {"record_type", record.record_type},
-                                      {"completion_state", record.completion_state},
-                                      {"response_state", record.response_state},
-                                      {"score_or_value", record.score_or_value},
-                                      {"source_module_id", record.source_module_id},
-                                      {"timestamp", record.timestamp},
-                                      {"version", std::to_string(record.version)}}));
-        return ok_result();
-    } catch (const std::exception& e) {
-        return error_result(e.what());
-    }
-}
-
-MemoryResult FileMemoryStore::upsert_retrieval_index_record(const KnowledgeRetrievalIndexRecord& record) {
-    try {
-        retrieval_index_by_id_[record.record_id] = record;
-        append_line(layer_file(data_root_, MemoryLayer::KnowledgeRetrievalIndex),
-                    serialize_fields({{"record_id", record.record_id},
-                                      {"document_id", record.document_id},
-                                      {"source_reference", record.source_reference},
-                                      {"indexing_status", record.indexing_status},
-                                      {"metadata", serialize_map(record.metadata)},
-                                      {"source_module_id", record.source_module_id},
-                                      {"created_at", record.created_at},
-                                      {"updated_at", record.updated_at},
-                                      {"version", std::to_string(record.version)}}));
-        return ok_result();
-    } catch (const std::exception& e) {
-        return error_result(e.what());
-    }
-}
-
-MemoryResultWith<LifeEntity> FileMemoryStore::get_entity_by_id(const EntityId& entity_id) const {
-    emit_memory_event(EventCategory::MemoryReadPerformed,
-                      MemoryLayer::LifeModelGraph,
-                      entity_id,
-                      MemoryOperationType::Read,
-                      "",
-                      "Entity read performed.");
-    auto it = entities_by_id_.find(entity_id);
-    if (it == entities_by_id_.end()) {
-        return error_with<LifeEntity>("entity not found");
-    }
-    return success(it->second);
-}
-
-MemoryResultWith<std::vector<LifeEntity>> FileMemoryStore::list_entities_by_type(EntityType type) const {
-    std::vector<LifeEntity> records;
-    for (const auto& [_, entity] : entities_by_id_) {
-        if (entity.entity_type == type) {
-            records.push_back(entity);
-        }
-    }
-    std::sort(records.begin(), records.end(), [](const auto& lhs, const auto& rhs) { return lhs.entity_id < rhs.entity_id; });
-    return success(records);
-}
-
-MemoryResultWith<std::vector<LifeRelationship>> FileMemoryStore::get_relationships_for_entity(
-    const EntityId& entity_id) const {
-    std::vector<LifeRelationship> records;
-    for (const auto& [_, rel] : relationships_by_id_) {
-        if (rel.from_entity_id == entity_id || rel.to_entity_id == entity_id) {
-            records.push_back(rel);
-        }
-    }
-    std::sort(records.begin(), records.end(),
-              [](const auto& lhs, const auto& rhs) { return lhs.relationship_id < rhs.relationship_id; });
-    return success(records);
-}
-
-MemoryResultWith<ProjectMemoryRecord> FileMemoryStore::get_project_record_by_project_entity_id(
-    const EntityId& project_entity_id) const {
-    for (const auto& [_, record] : project_memory_by_id_) {
-        if (record.project_entity_id == project_entity_id) {
-            return success(record);
-        }
-    }
-    return error_with<ProjectMemoryRecord>("project record not found");
-}
-
-MemoryResultWith<std::vector<PreferenceRecord>> FileMemoryStore::get_preferences_by_prefix_or_key(
-    const std::string& key_or_prefix,
-    bool exact_match) const {
-    std::vector<PreferenceRecord> records;
-    for (const auto& [_, record] : preferences_by_id_) {
-        if ((exact_match && record.preference_key == key_or_prefix) ||
-            (!exact_match && record.preference_key.rfind(key_or_prefix, 0) == 0)) {
-            records.push_back(record);
-        }
-    }
-    std::sort(records.begin(), records.end(),
-              [](const auto& lhs, const auto& rhs) { return lhs.preference_key < rhs.preference_key; });
-    return success(records);
-}
-
-MemoryResultWith<std::vector<EpisodicMemoryRecord>> FileMemoryStore::list_recent_episodic_records(
-    std::size_t max_records) const {
-    std::vector<EpisodicMemoryRecord> records = episodic_records_;
-    std::sort(records.begin(), records.end(),
-              [](const auto& lhs, const auto& rhs) { return lhs.timestamp > rhs.timestamp; });
-    if (records.size() > max_records) {
-        records.resize(max_records);
-    }
-    return success(records);
-}
-
-MemoryResultWith<std::vector<BehavioralHistoryRecord>> FileMemoryStore::list_behavioral_history_for_subject(
-    const std::string& subject_key) const {
-    std::vector<BehavioralHistoryRecord> records;
-    for (const auto& record : behavioral_history_records_) {
-        if (record.subject_key == subject_key) {
-            records.push_back(record);
-        }
-    }
-    std::sort(records.begin(), records.end(),
-              [](const auto& lhs, const auto& rhs) { return lhs.timestamp < rhs.timestamp; });
-    return success(records);
-}
-
-MemoryResultWith<MemoryRecordView> FileMemoryStore::read_record_by_layer_and_id(MemoryLayer layer,
-                                                                                  const RecordId& id) const {
-    if (layer == MemoryLayer::PreferenceMemory) {
-        auto it = preferences_by_id_.find(id);
-        if (it == preferences_by_id_.end()) {
-            return error_with<MemoryRecordView>("record not found");
-        }
-        return success(MemoryRecordView{.layer = layer,
-                                        .record_id = id,
-                                        .fields = {{"preference_key", it->second.preference_key},
-                                                   {"value", it->second.value}}});
-    }
-    return error_with<MemoryRecordView>("layer not implemented for record read");
-}
-
-MemoryResultWith<std::vector<MemoryRecordView>> FileMemoryStore::list_records_for_query(
-    MemoryLayer layer,
-    const QueryToken& token) const {
-    std::vector<MemoryRecordView> records;
-    if (layer == MemoryLayer::EpisodicMemory) {
-        for (const auto& record : episodic_records_) {
-            if (record.event_type == token || record.summary.find(token) != std::string::npos) {
-                records.push_back(MemoryRecordView{.layer = layer,
-                                                   .record_id = record.record_id,
-                                                   .fields = {{"event_type", record.event_type},
-                                                              {"summary", record.summary}}});
-            }
-        }
-    }
-    emit_memory_event(EventCategory::MemoryQueryPerformed,
-                      layer,
-                      token,
-                      MemoryOperationType::Query,
-                      "",
-                      "Memory query performed.");
-    return success(records);
-}
-
-MemoryResultWith<LifeGraphSnapshotMetadata> FileMemoryStore::get_life_graph_snapshot_metadata() const {
-    return success(LifeGraphSnapshotMetadata{.snapshot_version = snapshot_version_,
-                                             .created_at = current_timestamp_utc(),
-                                             .schema_version = "sprint2-v1",
-                                             .entity_count = entities_by_id_.size(),
-                                             .relationship_count = relationships_by_id_.size()});
-}
-
-MemoryResultWith<MemorySummary> FileMemoryStore::get_memory_summary() const {
-    return success(MemorySummary{.entity_count = entities_by_id_.size(),
-                                 .relationship_count = relationships_by_id_.size(),
-                                 .episodic_count = episodic_records_.size(),
-                                 .preference_count = preferences_by_id_.size(),
-                                 .relationship_memory_count = relationship_memory_by_id_.size(),
-                                 .project_memory_count = project_memory_by_id_.size(),
-                                 .behavioral_history_count = behavioral_history_records_.size(),
-                                 .retrieval_index_count = retrieval_index_by_id_.size(),
-                                 .integration_configuration_count = integration_configs_by_id_.size()});
-}
+MemoryResultWith<std::vector<ScheduledCommitment>> FileMemoryStore::list_commitments_in_window(const TimestampString& start_time, const TimestampString& end_time) const { std::vector<ScheduledCommitment> out; for (const auto& [_, rec] : commitments_by_id_) if (in_window(rec.start_time, rec.end_time, start_time, end_time)) out.push_back(rec); std::sort(out.begin(), out.end(), [](const auto& a, const auto& b){ return a.start_time == b.start_time ? a.schedule_item_id < b.schedule_item_id : a.start_time < b.start_time; }); emit_memory_event(EventCategory::MemoryQueryPerformed, MemoryLayer::Scheduling, start_time + ":" + end_time, MemoryOperationType::Query, "", "Scheduling commitments queried."); return success(out); }
+MemoryResultWith<std::vector<SchedulingTaskCandidate>> FileMemoryStore::list_task_candidates_by_status_and_range(ScheduleStatus status, const TimestampString& start_time, const TimestampString& end_time) const { std::vector<SchedulingTaskCandidate> out; for (const auto& [_, rec] : task_candidates_by_id_) if (rec.status == status && overlaps(rec.earliest_start, rec.latest_end, start_time, end_time)) out.push_back(rec); std::sort(out.begin(), out.end(), [](const auto& a, const auto& b){ return a.earliest_start == b.earliest_start ? a.schedule_item_id < b.schedule_item_id : a.earliest_start < b.earliest_start; }); return success(out); }
+MemoryResultWith<std::vector<AvailabilityWindow>> FileMemoryStore::list_availability_windows_in_window(const TimestampString& start_time, const TimestampString& end_time) const { std::vector<AvailabilityWindow> out; for (const auto& [_, rec] : windows_by_id_) if (in_window(rec.start_time, rec.end_time, start_time, end_time)) out.push_back(rec); std::sort(out.begin(), out.end(), [](const auto& a, const auto& b){ return a.start_time == b.start_time ? a.window_id < b.window_id : a.start_time < b.start_time; }); return success(out); }
+MemoryResultWith<std::vector<SchedulingProposal>> FileMemoryStore::list_proposals_for_task_candidate(const ScheduleItemId& task_candidate_id) const { std::vector<SchedulingProposal> out; for (const auto& [_, rec] : proposals_by_id_) if (rec.related_task_candidate_id == task_candidate_id) out.push_back(rec); std::sort(out.begin(), out.end(), [](const auto& a, const auto& b){ return a.proposal_rank == b.proposal_rank ? a.proposal_id < b.proposal_id : a.proposal_rank < b.proposal_rank; }); return success(out); }
+MemoryResultWith<std::vector<SchedulingConflict>> FileMemoryStore::list_conflicts(const TimestampString& start_time, const TimestampString& end_time, const std::optional<ScheduleItemId>& schedule_item_id) const { std::vector<SchedulingConflict> out; for (const auto& [_, rec] : conflicts_by_id_) { bool time_match = rec.detected_at >= start_time && rec.detected_at <= end_time; bool item_match = !schedule_item_id || rec.primary_schedule_item_id == *schedule_item_id || rec.secondary_schedule_item_id == *schedule_item_id; if (time_match && item_match) out.push_back(rec); } std::sort(out.begin(), out.end(), [](const auto& a, const auto& b){ return a.detected_at == b.detected_at ? a.conflict_id < b.conflict_id : a.detected_at < b.detected_at; }); return success(out); }
+MemoryResultWith<SchedulingProposal> FileMemoryStore::get_proposal_by_id(const ProposalId& proposal_id) const { auto it = proposals_by_id_.find(proposal_id); return it == proposals_by_id_.end() ? error_with<SchedulingProposal>("proposal not found") : success(it->second); }
+MemoryResultWith<ScheduledCommitment> FileMemoryStore::get_commitment_by_id(const ScheduleItemId& commitment_id) const { auto it = commitments_by_id_.find(commitment_id); return it == commitments_by_id_.end() ? error_with<ScheduledCommitment>("commitment not found") : success(it->second); }
+MemoryResultWith<SchedulingTaskCandidate> FileMemoryStore::get_task_candidate_by_id(const ScheduleItemId& task_candidate_id) const { auto it = task_candidates_by_id_.find(task_candidate_id); return it == task_candidates_by_id_.end() ? error_with<SchedulingTaskCandidate>("task candidate not found") : success(it->second); }
+MemoryResultWith<SchedulingConstraintSet> FileMemoryStore::get_constraint_set_by_id(const ConstraintSetId& constraint_set_id) const { auto it = constraint_sets_by_id_.find(constraint_set_id); return it == constraint_sets_by_id_.end() ? error_with<SchedulingConstraintSet>("constraint set not found") : success(it->second); }
 
 MemoryResult FileMemoryStore::load_from_disk() {
-    emit_memory_event(EventCategory::MemoryLoadStarted,
-                      MemoryLayer::LifeModelGraph,
-                      "",
-                      MemoryOperationType::Read,
-                      "",
-                      "Memory load started.");
+    emit_memory_event(EventCategory::MemoryLoadStarted, MemoryLayer::LifeModelGraph, "", MemoryOperationType::Read, "", "Memory load started.");
     try {
-        entities_by_id_.clear();
-        relationships_by_id_.clear();
-        preferences_by_id_.clear();
-        relationship_memory_by_id_.clear();
-        project_memory_by_id_.clear();
-        retrieval_index_by_id_.clear();
-        episodic_records_.clear();
-        behavioral_history_records_.clear();
-        snapshot_version_ = 0;
-
-        for (const auto& line : read_lines(layer_file(data_root_, MemoryLayer::LifeModelGraph))) {
-            auto fields = parse_fields(line);
-            if (fields["record_kind"] != "life_entity") {
-                throw std::runtime_error("malformed life entity record kind");
-            }
-            LifeEntity entity{.entity_id = fields["entity_id"],
-                              .entity_type = parse_entity_type(fields["entity_type"]),
-                              .display_name = fields["display_name"],
-                              .canonical_name = fields["canonical_name"],
-                              .description = fields["description"],
-                              .created_at = fields["created_at"],
-                              .updated_at = fields["updated_at"],
-                              .source_module_id = fields["source_module_id"],
-                              .version = static_cast<MemoryVersion>(std::stoull(fields["version"])),
-                              .archived = fields["archived"] == "1",
-                              .attributes = parse_map(fields["attributes"])};
-            entities_by_id_[entity.entity_id] = entity;
-        }
-
-        for (const auto& line : read_lines(relationship_file(data_root_))) {
-            auto fields = parse_fields(line);
-            if (fields["record_kind"] != "life_relationship") {
-                throw std::runtime_error("malformed life relationship record kind");
-            }
-            LifeRelationship rel{.relationship_id = fields["relationship_id"],
-                                 .from_entity_id = fields["from_entity_id"],
-                                 .to_entity_id = fields["to_entity_id"],
-                                 .relationship_type = parse_relationship_type(fields["relationship_type"]),
-                                 .created_at = fields["created_at"],
-                                 .updated_at = fields["updated_at"],
-                                 .source_module_id = fields["source_module_id"],
-                                 .version = static_cast<MemoryVersion>(std::stoull(fields["version"])),
-                                 .attributes = parse_map(fields["attributes"])};
-            relationships_by_id_[rel.relationship_id] = rel;
-        }
-
-        for (const auto& line : read_lines(layer_file(data_root_, MemoryLayer::EpisodicMemory))) {
-            auto fields = parse_fields(line);
-            episodic_records_.push_back(EpisodicMemoryRecord{.record_id = fields["record_id"],
-                                                             .timestamp = fields["timestamp"],
-                                                             .event_type = fields["event_type"],
-                                                             .source_module_id = fields["source_module_id"],
-                                                             .associated_entity_ids = parse_list(fields["associated_entity_ids"]),
-                                                             .summary = fields["summary"],
-                                                             .details = parse_map(fields["details"]),
-                                                             .version = static_cast<MemoryVersion>(
-                                                                 std::stoull(fields["version"]))});
-        }
-
-        for (const auto& line : read_lines(layer_file(data_root_, MemoryLayer::PreferenceMemory))) {
-            auto fields = parse_fields(line);
-            PreferenceRecord record{.record_id = fields["record_id"],
-                                    .preference_key = fields["preference_key"],
-                                    .value = fields["value"],
-                                    .confidence = std::stod(fields["confidence"]),
-                                    .source_module_id = fields["source_module_id"],
-                                    .created_at = fields["created_at"],
-                                    .updated_at = fields["updated_at"],
-                                    .version = static_cast<MemoryVersion>(std::stoull(fields["version"]))};
-            preferences_by_id_[record.record_id] = record;
-        }
-
-        for (const auto& line : read_lines(layer_file(data_root_, MemoryLayer::RelationshipMemory))) {
-            auto fields = parse_fields(line);
-            RelationshipMemoryRecord record{.record_id = fields["record_id"],
-                                            .related_person_entity_id = fields["related_person_entity_id"],
-                                            .communication_cadence = fields["communication_cadence"],
-                                            .important_dates = parse_list(fields["important_dates"]),
-                                            .shared_interests = parse_list(fields["shared_interests"]),
-                                            .notes = fields["notes"],
-                                            .source_module_id = fields["source_module_id"],
-                                            .created_at = fields["created_at"],
-                                            .updated_at = fields["updated_at"],
-                                            .version = static_cast<MemoryVersion>(std::stoull(fields["version"]))};
-            relationship_memory_by_id_[record.record_id] = record;
-        }
-
-        for (const auto& line : read_lines(layer_file(data_root_, MemoryLayer::ProjectMemory))) {
-            auto fields = parse_fields(line);
-            ProjectMemoryRecord record{.record_id = fields["record_id"],
-                                       .project_entity_id = fields["project_entity_id"],
-                                       .objectives = parse_list(fields["objectives"]),
-                                       .milestones = parse_list(fields["milestones"]),
-                                       .active_task_ids = parse_list(fields["active_task_ids"]),
-                                       .dependency_ids = parse_list(fields["dependency_ids"]),
-                                       .progress_summary = fields["progress_summary"],
-                                       .source_module_id = fields["source_module_id"],
-                                       .created_at = fields["created_at"],
-                                       .updated_at = fields["updated_at"],
-                                       .version = static_cast<MemoryVersion>(std::stoull(fields["version"]))};
-            project_memory_by_id_[record.record_id] = record;
-        }
-
-        for (const auto& line : read_lines(layer_file(data_root_, MemoryLayer::BehavioralHistory))) {
-            auto fields = parse_fields(line);
-            behavioral_history_records_.push_back(BehavioralHistoryRecord{
-                .record_id = fields["record_id"],
-                .subject_key = fields["subject_key"],
-                .record_type = fields["record_type"],
-                .completion_state = fields["completion_state"],
-                .response_state = fields["response_state"],
-                .score_or_value = fields["score_or_value"],
-                .source_module_id = fields["source_module_id"],
-                .timestamp = fields["timestamp"],
-                .version = static_cast<MemoryVersion>(std::stoull(fields["version"]))});
-        }
-
-        for (const auto& line : read_lines(layer_file(data_root_, MemoryLayer::KnowledgeRetrievalIndex))) {
-            auto fields = parse_fields(line);
-            KnowledgeRetrievalIndexRecord record{.record_id = fields["record_id"],
-                                                 .document_id = fields["document_id"],
-                                                 .source_reference = fields["source_reference"],
-                                                 .indexing_status = fields["indexing_status"],
-                                                 .metadata = parse_map(fields["metadata"]),
-                                                 .source_module_id = fields["source_module_id"],
-                                                 .created_at = fields["created_at"],
-                                                 .updated_at = fields["updated_at"],
-                                                 .version = static_cast<MemoryVersion>(
-                                                     std::stoull(fields["version"]))};
-            retrieval_index_by_id_[record.record_id] = record;
-        }
-
-        for (const auto& line : read_lines(layer_file(data_root_, MemoryLayer::IntegrationConfiguration))) {
-            auto fields = parse_fields(line);
-            IntegrationConfigurationRecord record{.integration_config_id = fields["integration_config_id"],
-                                                  .integration_id = fields["integration_id"],
-                                                  .display_name = fields["display_name"],
-                                                  .enabled = fields["enabled"] == "1",
-                                                  .status = parse_integration_status(fields["status"]),
-                                                  .capability_visibility = parse_list(fields["capability_visibility"]),
-                                                  .connection_diagnostics = parse_map(fields["connection_diagnostics"]),
-                                                  .credential_storage_mode =
-                                                      parse_storage_mode(fields["credential_storage_mode"]),
-                                                  .credential_reference = fields["credential_reference"],
-                                                  .non_secret_settings = parse_map(fields["non_secret_settings"]),
-                                                  .created_at = fields["created_at"],
-                                                  .updated_at = fields["updated_at"],
-                                                  .version = static_cast<MemoryVersion>(
-                                                      std::stoull(fields["version"]))};
-            integration_configs_by_id_[record.integration_config_id] = record;
-        }
-
-        snapshot_version_ = entities_by_id_.size() + relationships_by_id_.size();
-        emit_memory_event(EventCategory::MemoryLoadCompleted,
-                          MemoryLayer::LifeModelGraph,
-                          "",
-                          MemoryOperationType::Read,
-                          "",
-                          "Memory load completed.");
+        entities_by_id_.clear(); relationships_by_id_.clear(); preferences_by_id_.clear(); relationship_memory_by_id_.clear(); project_memory_by_id_.clear(); retrieval_index_by_id_.clear(); integration_configs_by_id_.clear(); commitments_by_id_.clear(); task_candidates_by_id_.clear(); windows_by_id_.clear(); constraint_sets_by_id_.clear(); proposals_by_id_.clear(); decisions_by_id_.clear(); conflicts_by_id_.clear(); episodic_records_.clear(); behavioral_history_records_.clear();
+        for (const auto& line : read_lines(layer_file(data_root_, MemoryLayer::LifeModelGraph))) { auto f = parse_fields(line); if (f["record_kind"] != "life_entity") throw std::runtime_error("malformed life entity record kind"); entities_by_id_[f["entity_id"]] = {f["entity_id"], parse_entity_type(f["entity_type"]), f["display_name"], f["canonical_name"], f["description"], f["created_at"], f["updated_at"], f["source_module_id"], static_cast<MemoryVersion>(std::stoull(f["version"])), f["archived"]=="1", parse_map(f["attributes"])}; }
+        for (const auto& line : read_lines(relationship_file(data_root_))) { auto f = parse_fields(line); relationships_by_id_[f["relationship_id"]] = {f["relationship_id"], f["from_entity_id"], f["to_entity_id"], parse_relationship_type(f["relationship_type"]), f["created_at"], f["updated_at"], f["source_module_id"], static_cast<MemoryVersion>(std::stoull(f["version"])), parse_map(f["attributes"])}; }
+        for (const auto& line : read_lines(layer_file(data_root_, MemoryLayer::EpisodicMemory))) { auto f = parse_fields(line); episodic_records_.push_back({f["record_id"], f["timestamp"], f["event_type"], f["source_module_id"], parse_list(f["associated_entity_ids"]), f["summary"], parse_map(f["details"]), static_cast<MemoryVersion>(std::stoull(f["version"]))}); }
+        for (const auto& line : read_lines(layer_file(data_root_, MemoryLayer::PreferenceMemory))) { auto f = parse_fields(line); preferences_by_id_[f["record_id"]] = {f["record_id"], f["preference_key"], f["value"], std::stod(f["confidence"]), f["source_module_id"], f["created_at"], f["updated_at"], static_cast<MemoryVersion>(std::stoull(f["version"]))}; }
+        for (const auto& line : read_lines(layer_file(data_root_, MemoryLayer::ProjectMemory))) { auto f = parse_fields(line); project_memory_by_id_[f["record_id"]] = {f["record_id"], f["project_entity_id"], parse_list(f["objectives"]), parse_list(f["milestones"]), parse_list(f["active_task_ids"]), parse_list(f["dependency_ids"]), f["progress_summary"], f["source_module_id"], f["created_at"], f["updated_at"], static_cast<MemoryVersion>(std::stoull(f["version"]))}; }
+        for (const auto& line : read_lines(layer_file(data_root_, MemoryLayer::BehavioralHistory))) { auto f = parse_fields(line); behavioral_history_records_.push_back({f["record_id"], f["subject_key"], f["record_type"], f["completion_state"], f["response_state"], f["score_or_value"], f["source_module_id"], f["timestamp"], static_cast<MemoryVersion>(std::stoull(f["version"]))}); }
+        for (const auto& line : read_lines(layer_file(data_root_, MemoryLayer::KnowledgeRetrievalIndex))) { auto f = parse_fields(line); retrieval_index_by_id_[f["record_id"]] = {f["record_id"], f["document_id"], f["source_reference"], f["indexing_status"], parse_map(f["metadata"]), f["source_module_id"], f["created_at"], f["updated_at"], static_cast<MemoryVersion>(std::stoull(f["version"]))}; }
+        for (const auto& line : read_lines(layer_file(data_root_, MemoryLayer::IntegrationConfiguration))) { auto f = parse_fields(line); integration_configs_by_id_[f["integration_config_id"]] = {f["integration_config_id"], f["integration_id"], f["display_name"], f["enabled"]=="1", parse_integration_status(f["status"]), parse_list(f["capability_visibility"]), parse_map(f["connection_diagnostics"]), parse_storage_mode(f["credential_storage_mode"]), f["credential_reference"], parse_map(f["non_secret_settings"]), f["created_at"], f["updated_at"], static_cast<MemoryVersion>(std::stoull(f["version"]))}; }
+        for (const auto& line : read_lines(scheduling_file(data_root_, "commitments"))) { auto f = parse_fields(line); commitments_by_id_[f["schedule_item_id"]] = {f["schedule_item_id"], f["related_entity_id"], f["title"], f["description"], f["start_time"], f["end_time"], f["timezone"], parse_priority(f["priority"]), f["source_module_id"], f["created_at"], f["updated_at"], static_cast<std::uint64_t>(std::stoull(f["version"])), parse_schedule_status(f["status"]), parse_map(f["attributes"])}; }
+        for (const auto& line : read_lines(scheduling_file(data_root_, "task_candidates"))) { auto f = parse_fields(line); task_candidates_by_id_[f["schedule_item_id"]] = {f["schedule_item_id"], f["related_entity_id"], f["title"], f["description"], std::stoi(f["estimated_duration_minutes"]), f["earliest_start"], f["latest_end"], parse_priority(f["priority"]), f["splittable"]=="1", std::stoi(f["required_buffer_before_minutes"]), std::stoi(f["required_buffer_after_minutes"]), parse_list(f["dependency_ids"]), f["source_module_id"], f["created_at"], f["updated_at"], static_cast<std::uint64_t>(std::stoull(f["version"])), parse_schedule_status(f["status"])}; }
+        for (const auto& line : read_lines(scheduling_file(data_root_, "availability_windows"))) { auto f = parse_fields(line); windows_by_id_[f["window_id"]] = {f["window_id"], f["title"], f["start_time"], f["end_time"], f["timezone"], f["availability_type"], f["recurrence_placeholder"], f["source_module_id"], f["created_at"], f["updated_at"], static_cast<std::uint64_t>(std::stoull(f["version"]))}; }
+        for (const auto& line : read_lines(scheduling_file(data_root_, "constraint_sets"))) { auto f = parse_fields(line); constraint_sets_by_id_[f["constraint_set_id"]] = {f["constraint_set_id"], std::stoi(f["max_commitments_per_day"]), std::stoi(f["minimum_gap_minutes"]), f["working_hours_only"]=="1", parse_list(f["allowed_window_ids"]), parse_list(f["blocked_window_ids"]), parse_list(f["preference_tags"]), f["source_module_id"], f["created_at"], f["updated_at"], static_cast<std::uint64_t>(std::stoull(f["version"]))}; }
+        for (const auto& line : read_lines(scheduling_file(data_root_, "proposals"))) { auto f = parse_fields(line); proposals_by_id_[f["proposal_id"]] = {f["proposal_id"], f["related_task_candidate_id"], f["proposed_start_time"], f["proposed_end_time"], f["timezone"], std::stoi(f["proposal_rank"]), f["rationale"], f["based_on_constraint_set_id"], f["generated_at"], f["source_module_id"], static_cast<std::uint64_t>(std::stoull(f["version"])), parse_proposal_status(f["status"])}; }
+        for (const auto& line : read_lines(scheduling_file(data_root_, "decisions"))) { auto f = parse_fields(line); decisions_by_id_[f["decision_id"]] = {f["decision_id"], f["proposal_id"], f["resulting_commitment_id"], f["decision_type"], f["decided_at"], f["source_module_id"], f["summary"], static_cast<std::uint64_t>(std::stoull(f["version"]))}; }
+        for (const auto& line : read_lines(scheduling_file(data_root_, "conflicts"))) { auto f = parse_fields(line); conflicts_by_id_[f["conflict_id"]] = {f["conflict_id"], parse_conflict_type(f["conflict_type"]), f["primary_schedule_item_id"], f["secondary_schedule_item_id"], f["message"], f["detected_at"], f["source_module_id"], parse_map(f["fields"])}; }
+        snapshot_version_ = entities_by_id_.size() + relationships_by_id_.size() + commitments_by_id_.size();
+        emit_memory_event(EventCategory::MemoryLoadCompleted, MemoryLayer::LifeModelGraph, "", MemoryOperationType::Read, "", "Memory load completed.");
         return ok_result();
-    } catch (const std::exception& e) {
-        emit_memory_event(EventCategory::MemoryLoadFailed,
-                          MemoryLayer::LifeModelGraph,
-                          "",
-                          MemoryOperationType::Read,
-                          "",
-                          e.what());
-        return error_result(e.what());
-    }
+    } catch (const std::exception& e) { emit_memory_event(EventCategory::MemoryLoadFailed, MemoryLayer::LifeModelGraph, "", MemoryOperationType::Read, "", e.what()); return error_result(e.what()); }
 }
 
 MemoryResult FileMemoryStore::persist_to_disk() {
     ensure_parent(manifest_file(data_root_));
     std::ofstream out(manifest_file(data_root_));
-    if (!out.is_open()) {
-        return error_result("unable to write manifest");
-    }
-    out << "{\n"
-        << "  \"schema_version\": \"sprint2-v1\",\n"
-        << "  \"snapshot_version\": " << snapshot_version_ << ",\n"
-        << "  \"updated_at\": \"" << current_timestamp_utc() << "\"\n"
-        << "}\n";
+    if (!out.is_open()) return error_result("unable to write manifest");
+    out << "{\n  \"schema_version\": \"sprint3-v1\",\n  \"snapshot_version\": " << snapshot_version_ << ",\n  \"updated_at\": \"" << current_timestamp_utc() << "\"\n}\n";
     return static_cast<bool>(out) ? ok_result() : error_result("manifest write failed");
 }
 
-std::string to_string(MemoryLayer value) {
-    switch (value) {
-        case MemoryLayer::LifeModelGraph: return "LifeModelGraph";
-        case MemoryLayer::EpisodicMemory: return "EpisodicMemory";
-        case MemoryLayer::PreferenceMemory: return "PreferenceMemory";
-        case MemoryLayer::RelationshipMemory: return "RelationshipMemory";
-        case MemoryLayer::ProjectMemory: return "ProjectMemory";
-        case MemoryLayer::BehavioralHistory: return "BehavioralHistory";
-        case MemoryLayer::KnowledgeRetrievalIndex: return "KnowledgeRetrievalIndex";
-        case MemoryLayer::IntegrationConfiguration: return "IntegrationConfiguration";
-    }
-    return "Unknown";
-}
-
-std::string to_string(EntityType value) {
-    switch (value) {
-        case EntityType::Goal: return "Goal";
-        case EntityType::Commitment: return "Commitment";
-        case EntityType::Relationship: return "Relationship";
-        case EntityType::Project: return "Project";
-        case EntityType::Environment: return "Environment";
-        case EntityType::Location: return "Location";
-        case EntityType::Domain: return "Domain";
-        case EntityType::Task: return "Task";
-        case EntityType::Habit: return "Habit";
-        case EntityType::Person: return "Person";
-        case EntityType::Preference: return "Preference";
-        case EntityType::Integration: return "Integration";
-    }
-    return "Unknown";
-}
-
-std::string to_string(RelationshipType value) {
-    switch (value) {
-        case RelationshipType::Supports: return "Supports";
-        case RelationshipType::Contains: return "Contains";
-        case RelationshipType::AssociatedWith: return "AssociatedWith";
-        case RelationshipType::ScheduledIn: return "ScheduledIn";
-        case RelationshipType::DependsOn: return "DependsOn";
-        case RelationshipType::RelatedTo: return "RelatedTo";
-        case RelationshipType::OwnedBy: return "OwnedBy";
-        case RelationshipType::ConfiguredBy: return "ConfiguredBy";
-    }
-    return "Unknown";
-}
-
-std::string to_string(MemoryOperationType value) {
-    switch (value) {
-        case MemoryOperationType::Insert: return "Insert";
-        case MemoryOperationType::Update: return "Update";
-        case MemoryOperationType::Upsert: return "Upsert";
-        case MemoryOperationType::Delete: return "Delete";
-        case MemoryOperationType::Read: return "Read";
-        case MemoryOperationType::Query: return "Query";
-    }
-    return "Unknown";
-}
-
-std::string to_string(IntegrationStatus value) {
-    switch (value) {
-        case IntegrationStatus::Disabled: return "Disabled";
-        case IntegrationStatus::Enabled: return "Enabled";
-        case IntegrationStatus::Error: return "Error";
-        case IntegrationStatus::Unknown: return "Unknown";
-    }
-    return "Unknown";
-}
-
-std::string to_string(CredentialStorageMode value) {
-    switch (value) {
-        case CredentialStorageMode::InlinePlaceholderOnly: return "InlinePlaceholderOnly";
-        case CredentialStorageMode::ExternalSecretReference: return "ExternalSecretReference";
-        case CredentialStorageMode::Unset: return "Unset";
-    }
-    return "Unknown";
-}
+std::string to_string(MemoryLayer value) { switch (value) { case MemoryLayer::LifeModelGraph: return "LifeModelGraph"; case MemoryLayer::EpisodicMemory: return "EpisodicMemory"; case MemoryLayer::PreferenceMemory: return "PreferenceMemory"; case MemoryLayer::RelationshipMemory: return "RelationshipMemory"; case MemoryLayer::ProjectMemory: return "ProjectMemory"; case MemoryLayer::BehavioralHistory: return "BehavioralHistory"; case MemoryLayer::KnowledgeRetrievalIndex: return "KnowledgeRetrievalIndex"; case MemoryLayer::IntegrationConfiguration: return "IntegrationConfiguration"; case MemoryLayer::Scheduling: return "Scheduling"; } return "Unknown"; }
+std::string to_string(EntityType value) { switch (value) { case EntityType::Goal: return "Goal"; case EntityType::Commitment: return "Commitment"; case EntityType::Relationship: return "Relationship"; case EntityType::Project: return "Project"; case EntityType::Environment: return "Environment"; case EntityType::Location: return "Location"; case EntityType::Domain: return "Domain"; case EntityType::Task: return "Task"; case EntityType::Habit: return "Habit"; case EntityType::Person: return "Person"; case EntityType::Preference: return "Preference"; case EntityType::Integration: return "Integration"; } return "Unknown"; }
+std::string to_string(RelationshipType value) { switch (value) { case RelationshipType::Supports: return "Supports"; case RelationshipType::Contains: return "Contains"; case RelationshipType::AssociatedWith: return "AssociatedWith"; case RelationshipType::ScheduledIn: return "ScheduledIn"; case RelationshipType::DependsOn: return "DependsOn"; case RelationshipType::RelatedTo: return "RelatedTo"; case RelationshipType::OwnedBy: return "OwnedBy"; case RelationshipType::ConfiguredBy: return "ConfiguredBy"; } return "Unknown"; }
+std::string to_string(MemoryOperationType value) { switch (value) { case MemoryOperationType::Insert: return "Insert"; case MemoryOperationType::Update: return "Update"; case MemoryOperationType::Upsert: return "Upsert"; case MemoryOperationType::Delete: return "Delete"; case MemoryOperationType::Read: return "Read"; case MemoryOperationType::Query: return "Query"; } return "Unknown"; }
+std::string to_string(IntegrationStatus value) { switch (value) { case IntegrationStatus::Disabled: return "Disabled"; case IntegrationStatus::Enabled: return "Enabled"; case IntegrationStatus::Error: return "Error"; case IntegrationStatus::Unknown: return "Unknown"; } return "Unknown"; }
+std::string to_string(CredentialStorageMode value) { switch (value) { case CredentialStorageMode::InlinePlaceholderOnly: return "InlinePlaceholderOnly"; case CredentialStorageMode::ExternalSecretReference: return "ExternalSecretReference"; case CredentialStorageMode::Unset: return "Unset"; } return "Unknown"; }
 
 }  // namespace life_orchestrator::core
