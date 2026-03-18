@@ -29,6 +29,9 @@ public:
     MemoryResult append_behavioral_decision(const BehavioralTriageDecision& record);
     MemoryResult upsert_behavioral_backlog_item(const BehavioralBacklogItem& record);
     MemoryResult append_behavioral_intervention(const BehavioralInterventionRecord& record);
+    MemoryResult upsert_activity_inventory_item(const ActivityInventoryItem& record);
+    MemoryResult upsert_procedural_audit_run_record(const ProceduralAuditRunRecord& record);
+    MemoryResult upsert_optimization_proposal_record(const OptimizationProposalRecord& record);
 
     MemoryResultWith<std::vector<ScheduledCommitment>> list_commitments_in_window(const TimestampString& start_time,
                                                                                   const TimestampString& end_time) const;
@@ -56,6 +59,14 @@ public:
     MemoryResultWith<BehavioralTriageDecision> get_behavioral_decision_by_id(const BehavioralDecisionId& decision_id) const;
     MemoryResultWith<BehavioralBacklogItem> get_behavioral_backlog_item_by_proposal_id(const BehavioralProposalId& proposal_id) const;
     MemoryResultWith<BehavioralMemorySummary> get_behavioral_memory_summary() const;
+    MemoryResultWith<std::vector<ActivityInventoryItem>> list_activity_inventory_items() const;
+    MemoryResultWith<ActivityInventoryItem> get_activity_inventory_item_by_id(const ActivityInventoryItemId& activity_inventory_item_id) const;
+    MemoryResultWith<std::vector<ProceduralAuditRunRecord>> list_procedural_audit_runs() const;
+    MemoryResultWith<ProceduralAuditRunRecord> get_procedural_audit_run_by_id(const ProceduralAuditRunId& procedural_audit_run_id) const;
+    MemoryResultWith<std::vector<OptimizationProposalRecord>> list_optimization_proposal_records() const;
+    MemoryResultWith<OptimizationProposalRecord> get_optimization_proposal_record_by_id(const OptimizationProposalId& optimization_proposal_id) const;
+    MemoryResultWith<std::vector<OptimizationProposalRecord>> list_optimization_proposals_for_audit_run(const ProceduralAuditRunId& procedural_audit_run_id) const;
+    MemoryResultWith<ProceduralMemorySummary> get_procedural_memory_summary() const;
 
 private:
     IMemoryStore& store_;

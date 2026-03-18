@@ -10,6 +10,7 @@ enable_testing()
 add_library(lifeorchestrator_core
     src/core/contracts.cpp
     src/core/behavioral.cpp
+    src/core/procedural.cpp
     src/core/memory.cpp
     src/core/memory_service.cpp
 )
@@ -29,6 +30,8 @@ add_library(lifeorchestrator_control_plane
     src/coordination/scheduling_coordination_module.cpp
     src/coordination/behavioral_triage_engine.cpp
     src/coordination/behavioral_triage_module.cpp
+    src/meta/procedural_auditor_engine.cpp
+    src/meta/procedural_auditor_module.cpp
 )
 target_include_directories(lifeorchestrator_control_plane PUBLIC src)
 target_link_libraries(lifeorchestrator_control_plane PUBLIC lifeorchestrator_core)

@@ -30,6 +30,8 @@ ApplicationRunMode parse_run_mode(const std::string& value) {
     if (value == "schedule-health-check") return ApplicationRunMode::ScheduleHealthCheck;
     if (value == "behavioral-health-check") return ApplicationRunMode::BehavioralHealthCheck;
     if (value == "behavioral-list-backlog") return ApplicationRunMode::BehavioralListBacklog;
+    if (value == "procedural-health-check") return ApplicationRunMode::ProceduralHealthCheck;
+    if (value == "procedural-list-proposals") return ApplicationRunMode::ProceduralListProposals;
     return ApplicationRunMode::BootstrapCheck;
 }
 
@@ -40,6 +42,8 @@ std::string run_mode_name(ApplicationRunMode mode) {
         case ApplicationRunMode::ScheduleHealthCheck: return "schedule-health-check";
         case ApplicationRunMode::BehavioralHealthCheck: return "behavioral-health-check";
         case ApplicationRunMode::BehavioralListBacklog: return "behavioral-list-backlog";
+        case ApplicationRunMode::ProceduralHealthCheck: return "procedural-health-check";
+        case ApplicationRunMode::ProceduralListProposals: return "procedural-list-proposals";
         case ApplicationRunMode::BootstrapCheck: return "bootstrap-check";
     }
     return "bootstrap-check";
@@ -64,7 +68,10 @@ ApplicationRuntime::ApplicationRuntime(const ApplicationBootstrapConfig& bootstr
       integration_repository(bootstrap_config.data_root_path),
       scheduling_module(std::make_shared<coordination::SchedulingCoordinationModule>(&memory_service)),
       behavioral_module(std::make_shared<coordination::BehavioralTriageModule>(&memory_service)),
-      control_plane(module_registry, event_logger) {}
+      procedural_module(),
+      control_plane(module_registry, event_logger) {
+    procedural_module = std::make_shared<meta::ProceduralAuditorModule>(&memory_service, &control_plane);
+}
 
 ApplicationBootstrapResult resolve_bootstrap_config(const std::vector<std::string>& args,
                                                     const std::string& environment_data_root,
@@ -86,7 +93,7 @@ ApplicationBootstrapResult resolve_bootstrap_config(const std::vector<std::strin
 
     for (std::size_t i = 0; i < args.size(); ++i) {
         const auto& arg = args[i];
-        if (arg == "status" || arg == "list-modules" || arg == "schedule-health-check" || arg == "behavioral-health-check" || arg == "behavioral-list-backlog" || arg == "bootstrap-check") {
+        if (arg == "status" || arg == "list-modules" || arg == "schedule-health-check" || arg == "behavioral-health-check" || arg == "behavioral-list-backlog" || arg == "procedural-health-check" || arg == "procedural-list-proposals" || arg == "bootstrap-check") {
             command = arg;
             command_set = true;
             continue;
@@ -129,7 +136,7 @@ ApplicationBootstrapResult resolve_bootstrap_config(const std::vector<std::strin
                 {}};
     }
 
-    if (command != "status" && command != "list-modules" && command != "schedule-health-check" && command != "behavioral-health-check" && command != "behavioral-list-backlog" && command != "bootstrap-check") {
+    if (command != "status" && command != "list-modules" && command != "schedule-health-check" && command != "behavioral-health-check" && command != "behavioral-list-backlog" && command != "procedural-health-check" && command != "procedural-list-proposals" && command != "bootstrap-check") {
         return {false,
                 ApplicationExitCode::CommandValidationFailure,
                 "Unknown command: " + command,
@@ -149,7 +156,7 @@ ApplicationBootstrapResult resolve_bootstrap_config(const std::vector<std::strin
 }
 
 std::vector<std::shared_ptr<modules::IModule>> build_runtime_modules(ApplicationRuntime& runtime) {
-    return {runtime.behavioral_module, runtime.scheduling_module};
+    return {runtime.behavioral_module, runtime.procedural_module, runtime.scheduling_module};
 }
 
 ApplicationBootstrapResult initialize_runtime(ApplicationRuntime& runtime) {
@@ -296,6 +303,34 @@ ApplicationExitCode execute_command(ApplicationRuntime& runtime,
                    << "backlog_count=" << backlog.output_data.at("backlog_count") << '\n'
                    << "first_backlog_item_id=" << backlog.output_data.at("first_backlog_item_id") << '\n';
             return complete(ApplicationExitCode::Success, "Behavioral backlog command completed.");
+        }
+        case ApplicationRunMode::ProceduralHealthCheck: {
+            const auto state = runtime.control_plane.dispatch({"app-procedural-state", "behavioral.record_state", "life_orchestrator_app", core::RiskTier::Suggestive, {{"behavioral_state_snapshot_id", "state.procedural.health"}, {"captured_at", "2026-03-18T09:00:00.000Z"}, {"active_intervention_count", "0"}, {"backlog_count", "0"}, {"schedule_density_score", "0.2"}, {"recent_compliance_rate", "0.9"}, {"recent_failure_frequency", "0.1"}, {"fatigue_score", "0.2"}, {"stress_score", "0.2"}, {"decision_time", "2026-03-18T09:00:00.000Z"}}, "2026-03-18T09:00:00.000Z"});
+            const auto response = runtime.control_plane.dispatch({"app-procedural-health-check", "procedural.health_check", "life_orchestrator_app", core::RiskTier::Suggestive, {{"now", "2026-03-18T09:00:00.000Z"}}, "2026-03-18T09:00:00.000Z"});
+            if (state.status != core::ExecutionStatus::Succeeded || response.status != core::ExecutionStatus::Succeeded) {
+                error << "procedural_health_check=failed\n";
+                return complete(ApplicationExitCode::RuntimeOperationFailure, "Procedural health check failed.");
+            }
+            runtime.memory_store.persist_to_disk();
+            output << "procedural_health_check=ok\n"
+                   << "proposal_count=" << response.output_data.at("proposal_count") << '\n'
+                   << "triaged_count=" << response.output_data.at("triaged_count") << '\n'
+                   << "first_proposal_id=" << response.output_data.at("first_proposal_id") << '\n';
+            return complete(ApplicationExitCode::Success, "Procedural health check completed.");
+        }
+        case ApplicationRunMode::ProceduralListProposals: {
+            const auto proposals = runtime.memory_service.list_optimization_proposal_records();
+            if (!proposals.ok) {
+                error << "procedural_list_proposals=failed\nmessage=" << proposals.message << '\n';
+                return complete(ApplicationExitCode::RuntimeOperationFailure, proposals.message);
+            }
+            output << "procedural_list_proposals=ok\n"
+                   << "proposal_count=" << proposals.value->size() << '\n';
+            for (const auto& proposal : *proposals.value) {
+                output << "proposal_id=" << proposal.optimization_proposal_id << '\n'
+                       << "triage_status=" << proposal.triage_status << '\n';
+            }
+            return complete(ApplicationExitCode::Success, "Procedural list proposals completed.");
         }
         case ApplicationRunMode::BootstrapCheck: {
             const bool event_log_exists = std::filesystem::exists(runtime.config.events_file_path);

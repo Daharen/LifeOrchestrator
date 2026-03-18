@@ -3,6 +3,7 @@
 #include "control_plane/event_logger.hpp"
 #include "core/behavioral.hpp"
 #include "core/contracts.hpp"
+#include "core/procedural.hpp"
 
 #include <cstddef>
 #include <cstdint>
@@ -45,7 +46,8 @@ enum class MemoryLayer {
     KnowledgeRetrievalIndex,
     IntegrationConfiguration,
     Scheduling,
-    BehavioralTriage
+    BehavioralTriage,
+    ProceduralAuditing
 };
 
 enum class EntityType {
@@ -225,6 +227,9 @@ struct MemorySummary {
     std::size_t behavioral_decision_count;
     std::size_t behavioral_backlog_count;
     std::size_t behavioral_intervention_count;
+    std::size_t activity_inventory_count;
+    std::size_t procedural_audit_run_count;
+    std::size_t optimization_proposal_count;
 };
 
 struct MemoryRecordView {
@@ -258,6 +263,10 @@ public:
     virtual MemoryResult append_behavioral_decision(const BehavioralTriageDecision& record) = 0;
     virtual MemoryResult upsert_behavioral_backlog_item(const BehavioralBacklogItem& record) = 0;
     virtual MemoryResult append_behavioral_intervention(const BehavioralInterventionRecord& record) = 0;
+    virtual MemoryResult upsert_activity_inventory_item(const ActivityInventoryItem& record) = 0;
+    virtual MemoryResult upsert_procedural_audit_run_record(const ProceduralAuditRunRecord& record) = 0;
+    virtual MemoryResult upsert_optimization_proposal_record(const OptimizationProposalRecord& record) = 0;
+
 
     virtual MemoryResultWith<LifeEntity> get_entity_by_id(const EntityId& entity_id) const = 0;
     virtual MemoryResultWith<std::vector<LifeEntity>> list_entities_by_type(EntityType type) const = 0;
@@ -288,6 +297,14 @@ public:
     virtual MemoryResultWith<BehavioralTriageDecision> get_behavioral_decision_by_id(const BehavioralDecisionId& decision_id) const = 0;
     virtual MemoryResultWith<BehavioralBacklogItem> get_behavioral_backlog_item_by_proposal_id(const BehavioralProposalId& proposal_id) const = 0;
     virtual MemoryResultWith<BehavioralMemorySummary> get_behavioral_memory_summary() const = 0;
+    virtual MemoryResultWith<std::vector<ActivityInventoryItem>> list_activity_inventory_items() const = 0;
+    virtual MemoryResultWith<ActivityInventoryItem> get_activity_inventory_item_by_id(const ActivityInventoryItemId& activity_inventory_item_id) const = 0;
+    virtual MemoryResultWith<std::vector<ProceduralAuditRunRecord>> list_procedural_audit_runs() const = 0;
+    virtual MemoryResultWith<ProceduralAuditRunRecord> get_procedural_audit_run_by_id(const ProceduralAuditRunId& procedural_audit_run_id) const = 0;
+    virtual MemoryResultWith<std::vector<OptimizationProposalRecord>> list_optimization_proposal_records() const = 0;
+    virtual MemoryResultWith<OptimizationProposalRecord> get_optimization_proposal_record_by_id(const OptimizationProposalId& optimization_proposal_id) const = 0;
+    virtual MemoryResultWith<std::vector<OptimizationProposalRecord>> list_optimization_proposals_for_audit_run(const ProceduralAuditRunId& procedural_audit_run_id) const = 0;
+    virtual MemoryResultWith<ProceduralMemorySummary> get_procedural_memory_summary() const = 0;
 
     virtual MemoryResult load_from_disk() = 0;
     virtual MemoryResult persist_to_disk() = 0;
@@ -318,6 +335,9 @@ public:
     MemoryResult append_behavioral_decision(const BehavioralTriageDecision& record) override;
     MemoryResult upsert_behavioral_backlog_item(const BehavioralBacklogItem& record) override;
     MemoryResult append_behavioral_intervention(const BehavioralInterventionRecord& record) override;
+    MemoryResult upsert_activity_inventory_item(const ActivityInventoryItem& record) override;
+    MemoryResult upsert_procedural_audit_run_record(const ProceduralAuditRunRecord& record) override;
+    MemoryResult upsert_optimization_proposal_record(const OptimizationProposalRecord& record) override;
 
     MemoryResultWith<LifeEntity> get_entity_by_id(const EntityId& entity_id) const override;
     MemoryResultWith<std::vector<LifeEntity>> list_entities_by_type(EntityType type) const override;
@@ -348,6 +368,14 @@ public:
     MemoryResultWith<BehavioralTriageDecision> get_behavioral_decision_by_id(const BehavioralDecisionId& decision_id) const override;
     MemoryResultWith<BehavioralBacklogItem> get_behavioral_backlog_item_by_proposal_id(const BehavioralProposalId& proposal_id) const override;
     MemoryResultWith<BehavioralMemorySummary> get_behavioral_memory_summary() const override;
+    MemoryResultWith<std::vector<ActivityInventoryItem>> list_activity_inventory_items() const override;
+    MemoryResultWith<ActivityInventoryItem> get_activity_inventory_item_by_id(const ActivityInventoryItemId& activity_inventory_item_id) const override;
+    MemoryResultWith<std::vector<ProceduralAuditRunRecord>> list_procedural_audit_runs() const override;
+    MemoryResultWith<ProceduralAuditRunRecord> get_procedural_audit_run_by_id(const ProceduralAuditRunId& procedural_audit_run_id) const override;
+    MemoryResultWith<std::vector<OptimizationProposalRecord>> list_optimization_proposal_records() const override;
+    MemoryResultWith<OptimizationProposalRecord> get_optimization_proposal_record_by_id(const OptimizationProposalId& optimization_proposal_id) const override;
+    MemoryResultWith<std::vector<OptimizationProposalRecord>> list_optimization_proposals_for_audit_run(const ProceduralAuditRunId& procedural_audit_run_id) const override;
+    MemoryResultWith<ProceduralMemorySummary> get_procedural_memory_summary() const override;
 
     MemoryResult load_from_disk() override;
     MemoryResult persist_to_disk() override;
@@ -376,6 +404,9 @@ private:
     std::unordered_map<BacklogItemId, BehavioralBacklogItem> behavioral_backlog_items_by_id_;
     std::unordered_map<BehavioralProposalId, BacklogItemId> behavioral_backlog_item_id_by_proposal_id_;
     std::unordered_map<InterventionId, BehavioralInterventionRecord> behavioral_interventions_by_id_;
+    std::unordered_map<ActivityInventoryItemId, ActivityInventoryItem> activity_inventory_by_id_;
+    std::unordered_map<ProceduralAuditRunId, ProceduralAuditRunRecord> procedural_audit_runs_by_id_;
+    std::unordered_map<OptimizationProposalId, OptimizationProposalRecord> optimization_proposals_by_id_;
     std::vector<EpisodicMemoryRecord> episodic_records_;
     std::vector<BehavioralHistoryRecord> behavioral_history_records_;
 

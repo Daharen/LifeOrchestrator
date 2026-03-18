@@ -66,7 +66,12 @@ enum class EventCategory {
     ApplicationBootstrapFailed,
     ApplicationCommandStarted,
     ApplicationCommandCompleted,
-    ApplicationCommandFailed
+    ApplicationCommandFailed,
+    ProceduralInventoryUpdated,
+    ProceduralAuditStarted,
+    ProceduralAuditCompleted,
+    ProceduralAuditFailed,
+    ProceduralProposalGenerated
 };
 
 using ModuleId = std::string;

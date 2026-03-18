@@ -63,7 +63,7 @@ core::ActionResponse BehavioralTriageModule::record_state(const core::ActionRequ
 
 core::ActionResponse BehavioralTriageModule::triage_proposals(const core::ActionRequest& request, bool backlog_only) {
     std::vector<core::BehavioralProposal> proposals;
-    const auto now = core::current_timestamp_utc();
+    const auto now = param(request, "decision_time", core::current_timestamp_utc());
     const auto proposal_count = std::max(1, to_int(param(request, "proposal_count"), 1));
     for (int i = 0; i < proposal_count; ++i) {
         const auto suffix = proposal_count == 1 ? std::string{} : std::to_string(i + 1);
@@ -120,7 +120,7 @@ core::ActionResponse BehavioralTriageModule::reevaluate_backlog(const core::Acti
     auto backlog = memory_service_->list_behavioral_backlog_items();
     if (!backlog.ok) return {request.request_id, core::ExecutionStatus::Failed, descriptor_.module_id, backlog.message, {}, core::current_timestamp_utc()};
     std::vector<core::BehavioralProposal> eligible;
-    const auto now = core::current_timestamp_utc();
+    const auto now = param(request, "decision_time", core::current_timestamp_utc());
     for (const auto& item : *backlog.value) {
         if (item.reconsider_after && *item.reconsider_after > now) continue;
         auto proposal = memory_service_->get_behavioral_proposal_by_id(item.behavioral_proposal_id);
