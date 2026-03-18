@@ -1,14 +1,11 @@
 #include "control_plane/control_plane.hpp"
 #include "coordination/scheduling_coordination_module.hpp"
 #include "core/contracts.hpp"
-#include "core/memory.hpp"
-#include "core/memory_service.hpp"
-#include "integration/integration_configuration_repository.hpp"
 
 #include <filesystem>
 #include <fstream>
 #include <iostream>
-#include <memory>
+#include <sstream>
 #include <stdexcept>
 
 namespace {
@@ -197,7 +194,6 @@ int main() {
         std::cerr << "Test failure: " << e.what() << '\n';
         return 1;
     }
-
     std::cout << "All tests passed\n";
     return 0;
 }

@@ -30,12 +30,21 @@ add_library(lifeorchestrator_control_plane
 target_include_directories(lifeorchestrator_control_plane PUBLIC src)
 target_link_libraries(lifeorchestrator_control_plane PUBLIC lifeorchestrator_core)
 
+add_library(lifeorchestrator_app_support
+    src/app/application_bootstrap.cpp
+)
+target_include_directories(lifeorchestrator_app_support PUBLIC src)
+target_link_libraries(lifeorchestrator_app_support PUBLIC lifeorchestrator_control_plane lifeorchestrator_integration)
+
+add_executable(life_orchestrator_app src/app/main.cpp)
+target_link_libraries(life_orchestrator_app PRIVATE lifeorchestrator_app_support)
+
 add_executable(control_plane_smoke src/control_plane/smoke_main.cpp)
 target_link_libraries(control_plane_smoke PRIVATE lifeorchestrator_control_plane)
 
 add_executable(lifeorchestrator_tests
     tests/test_main.cpp
 )
-target_link_libraries(lifeorchestrator_tests PRIVATE lifeorchestrator_control_plane lifeorchestrator_integration)
+target_link_libraries(lifeorchestrator_tests PRIVATE lifeorchestrator_app_support)
 
 add_test(NAME lifeorchestrator_tests COMMAND lifeorchestrator_tests)
