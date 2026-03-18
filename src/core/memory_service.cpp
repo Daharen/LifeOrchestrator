@@ -34,6 +34,10 @@ MemoryResult MemoryService::append_behavioral_state_snapshot(const BehavioralSta
 MemoryResult MemoryService::append_behavioral_decision(const BehavioralTriageDecision& record) { return store_.append_behavioral_decision(record); }
 MemoryResult MemoryService::upsert_behavioral_backlog_item(const BehavioralBacklogItem& record) { return store_.upsert_behavioral_backlog_item(record); }
 MemoryResult MemoryService::append_behavioral_intervention(const BehavioralInterventionRecord& record) { return store_.append_behavioral_intervention(record); }
+MemoryResult MemoryService::upsert_activity_inventory_item(const ActivityInventoryItem& record) { return store_.upsert_activity_inventory_item(record); }
+MemoryResult MemoryService::upsert_procedural_audit_run_record(const ProceduralAuditRunRecord& record) { return store_.upsert_procedural_audit_run_record(record); }
+MemoryResult MemoryService::upsert_optimization_proposal_record(const OptimizationProposalRecord& record) { return store_.upsert_optimization_proposal_record(record); }
+
 MemoryResultWith<std::vector<ScheduledCommitment>> MemoryService::list_commitments_in_window(const TimestampString& start_time, const TimestampString& end_time) const { return store_.list_commitments_in_window(start_time, end_time); }
 MemoryResultWith<std::vector<SchedulingTaskCandidate>> MemoryService::list_task_candidates_by_status_and_range(ScheduleStatus status, const TimestampString& start_time, const TimestampString& end_time) const { return store_.list_task_candidates_by_status_and_range(status, start_time, end_time); }
 MemoryResultWith<std::vector<AvailabilityWindow>> MemoryService::list_availability_windows_in_window(const TimestampString& start_time, const TimestampString& end_time) const { return store_.list_availability_windows_in_window(start_time, end_time); }
@@ -51,5 +55,13 @@ MemoryResultWith<BehavioralProposal> MemoryService::get_behavioral_proposal_by_i
 MemoryResultWith<BehavioralTriageDecision> MemoryService::get_behavioral_decision_by_id(const BehavioralDecisionId& decision_id) const { return store_.get_behavioral_decision_by_id(decision_id); }
 MemoryResultWith<BehavioralBacklogItem> MemoryService::get_behavioral_backlog_item_by_proposal_id(const BehavioralProposalId& proposal_id) const { return store_.get_behavioral_backlog_item_by_proposal_id(proposal_id); }
 MemoryResultWith<BehavioralMemorySummary> MemoryService::get_behavioral_memory_summary() const { return store_.get_behavioral_memory_summary(); }
+MemoryResultWith<std::vector<ActivityInventoryItem>> MemoryService::list_activity_inventory_items() const { return store_.list_activity_inventory_items(); }
+MemoryResultWith<ActivityInventoryItem> MemoryService::get_activity_inventory_item_by_id(const ActivityInventoryItemId& activity_inventory_item_id) const { return store_.get_activity_inventory_item_by_id(activity_inventory_item_id); }
+MemoryResultWith<std::vector<ProceduralAuditRunRecord>> MemoryService::list_procedural_audit_runs() const { return store_.list_procedural_audit_runs(); }
+MemoryResultWith<ProceduralAuditRunRecord> MemoryService::get_procedural_audit_run_by_id(const ProceduralAuditRunId& procedural_audit_run_id) const { return store_.get_procedural_audit_run_by_id(procedural_audit_run_id); }
+MemoryResultWith<std::vector<OptimizationProposalRecord>> MemoryService::list_optimization_proposal_records() const { return store_.list_optimization_proposal_records(); }
+MemoryResultWith<OptimizationProposalRecord> MemoryService::get_optimization_proposal_record_by_id(const OptimizationProposalId& optimization_proposal_id) const { return store_.get_optimization_proposal_record_by_id(optimization_proposal_id); }
+MemoryResultWith<std::vector<OptimizationProposalRecord>> MemoryService::list_optimization_proposals_for_audit_run(const ProceduralAuditRunId& procedural_audit_run_id) const { return store_.list_optimization_proposals_for_audit_run(procedural_audit_run_id); }
+MemoryResultWith<ProceduralMemorySummary> MemoryService::get_procedural_memory_summary() const { return store_.get_procedural_memory_summary(); }
 
 }  // namespace life_orchestrator::core

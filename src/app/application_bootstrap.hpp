@@ -7,6 +7,7 @@
 #include "core/memory.hpp"
 #include "core/memory_service.hpp"
 #include "integration/integration_configuration_repository.hpp"
+#include "meta/procedural_auditor_module.hpp"
 
 #include <filesystem>
 #include <memory>
@@ -22,6 +23,8 @@ enum class ApplicationRunMode {
     ScheduleHealthCheck,
     BehavioralHealthCheck,
     BehavioralListBacklog,
+    ProceduralHealthCheck,
+    ProceduralListProposals,
     BootstrapCheck
 };
 
@@ -60,6 +63,7 @@ struct ApplicationRuntime {
     control_plane::ModuleRegistry module_registry;
     std::shared_ptr<coordination::SchedulingCoordinationModule> scheduling_module;
     std::shared_ptr<coordination::BehavioralTriageModule> behavioral_module;
+    std::shared_ptr<meta::ProceduralAuditorModule> procedural_module;
     control_plane::ControlPlane control_plane;
 
     explicit ApplicationRuntime(const ApplicationBootstrapConfig& config);
