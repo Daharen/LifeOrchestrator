@@ -77,13 +77,7 @@ LO_SWITCH_TO_STRING(EventCategory, value,
     case EventCategory::SchedulingOperationFailed: return "SchedulingOperationFailed";
     case EventCategory::SchedulingConflictDetected: return "SchedulingConflictDetected";
     case EventCategory::SchedulingProposalGenerated: return "SchedulingProposalGenerated";
-    case EventCategory::SchedulingProposalCommitted: return "SchedulingProposalCommitted";
-    case EventCategory::ApplicationBootstrapStarted: return "ApplicationBootstrapStarted";
-    case EventCategory::ApplicationBootstrapCompleted: return "ApplicationBootstrapCompleted";
-    case EventCategory::ApplicationBootstrapFailed: return "ApplicationBootstrapFailed";
-    case EventCategory::ApplicationCommandStarted: return "ApplicationCommandStarted";
-    case EventCategory::ApplicationCommandCompleted: return "ApplicationCommandCompleted";
-    case EventCategory::ApplicationCommandFailed: return "ApplicationCommandFailed";)
+    case EventCategory::SchedulingProposalCommitted: return "SchedulingProposalCommitted";)
 
 LO_SWITCH_TO_STRING(ScheduleItemType, value,
     case ScheduleItemType::Commitment: return "Commitment";
