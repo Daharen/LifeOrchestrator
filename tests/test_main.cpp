@@ -1,5 +1,6 @@
 #include "control_plane/control_plane.hpp"
 #include "coordination/scheduling_coordination_module.hpp"
+#include "integration/integration_configuration_repository.hpp"
 #include "core/contracts.hpp"
 
 #include <filesystem>

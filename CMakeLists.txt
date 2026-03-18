@@ -37,6 +37,13 @@ target_include_directories(lifeorchestrator_app_support PUBLIC src)
 target_link_libraries(lifeorchestrator_app_support PUBLIC lifeorchestrator_control_plane lifeorchestrator_integration)
 
 add_executable(life_orchestrator_app src/app/main.cpp)
+set_target_properties(life_orchestrator_app PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}"
+    RUNTIME_OUTPUT_DIRECTORY_DEBUG "${CMAKE_BINARY_DIR}/Debug"
+    RUNTIME_OUTPUT_DIRECTORY_RELEASE "${CMAKE_BINARY_DIR}/Release"
+    RUNTIME_OUTPUT_DIRECTORY_RELWITHDEBINFO "${CMAKE_BINARY_DIR}/RelWithDebInfo"
+    RUNTIME_OUTPUT_DIRECTORY_MINSIZEREL "${CMAKE_BINARY_DIR}/MinSizeRel"
+)
 target_link_libraries(life_orchestrator_app PRIVATE lifeorchestrator_app_support)
 
 add_executable(control_plane_smoke src/control_plane/smoke_main.cpp)

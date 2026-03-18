@@ -5,10 +5,17 @@
 - Added a thin application bootstrap composition root under `src/app/`.
 - Added deterministic runtime path resolution, module registration, memory initialization, integration configuration initialization, and command execution wiring.
 - Added permanent repo-root launcher wrappers `run.bat` and `run.ps1` for the existing outer updater-launcher chain.
+- Hardened the repo-root launcher so it remains the permanent boundary for CMake configure/build plus Windows multi-config executable discovery.
 
 ## Canonical executable target
 - Target: `life_orchestrator_app`
-- Normal launch chain: external updater-launcher -> repo-root `run.bat` or `run.ps1` -> `life_orchestrator_app`
+- Permanent launch chain: external updater-launcher -> repo-root `run.bat` or `run.ps1` -> `life_orchestrator_app`
+- The outer updater-launcher should continue calling only the repo-root launcher surface and should not need to know CMake target layout details.
+
+## Repo-root launcher convention
+- `run.ps1` remains a thin launcher that resolves the repo root, configures CMake into `build`, builds the canonical `life_orchestrator_app` target, discovers the executable, forwards arguments, and returns the application exit code.
+- On Windows multi-config generators, `run.ps1` builds `Debug` by default and checks `build\\Debug\\life_orchestrator_app.exe` before falling back through `Release`, `RelWithDebInfo`, `MinSizeRel`, and then single-config output locations.
+- `run.bat` remains a thin delegating wrapper to `run.ps1` for the outer updater-launcher.
 
 ## Runtime bootstrap config
 - `ApplicationBootstrapConfig`
@@ -58,8 +65,10 @@ Future GUI or operator-console work remains non-authoritative at runtime. The au
 ## Manual validation
 - `cmake -S . -B build`
 - `cmake --build build --target life_orchestrator_app`
-- `run.bat status`
-- `run.bat list-modules`
-- `run.bat bootstrap-check`
-- `run.bat schedule-health-check`
-- Optional: `run.ps1 status`
+- `./build/life_orchestrator_app status`
+- On Windows: `run.ps1 status`
+- On Windows: `run.bat status`
+- On Windows: `run.bat list-modules`
+- On Windows: `run.bat bootstrap-check`
+- On Windows: `run.bat schedule-health-check`
+- Most important validation: the existing external updater-launcher can continue invoking the repo-root launcher without any change.
