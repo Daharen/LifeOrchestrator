@@ -55,7 +55,13 @@ enum class EventCategory {
     SchedulingOperationFailed,
     SchedulingConflictDetected,
     SchedulingProposalGenerated,
-    SchedulingProposalCommitted
+    SchedulingProposalCommitted,
+    ApplicationBootstrapStarted,
+    ApplicationBootstrapCompleted,
+    ApplicationBootstrapFailed,
+    ApplicationCommandStarted,
+    ApplicationCommandCompleted,
+    ApplicationCommandFailed
 };
 
 using ModuleId = std::string;
