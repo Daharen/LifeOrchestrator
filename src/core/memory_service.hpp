@@ -1,5 +1,6 @@
 #pragma once
 
+#include "core/behavioral.hpp"
 #include "core/memory.hpp"
 
 namespace life_orchestrator::core {
@@ -23,6 +24,11 @@ public:
     MemoryResult append_proposal(const SchedulingProposal& record);
     MemoryResult append_decision(const SchedulingDecisionRecord& record);
     MemoryResult append_conflict(const SchedulingConflict& record);
+    MemoryResult append_behavioral_proposal(const BehavioralProposal& record);
+    MemoryResult append_behavioral_state_snapshot(const BehavioralStateSnapshot& record);
+    MemoryResult append_behavioral_decision(const BehavioralTriageDecision& record);
+    MemoryResult upsert_behavioral_backlog_item(const BehavioralBacklogItem& record);
+    MemoryResult append_behavioral_intervention(const BehavioralInterventionRecord& record);
 
     MemoryResultWith<std::vector<ScheduledCommitment>> list_commitments_in_window(const TimestampString& start_time,
                                                                                   const TimestampString& end_time) const;
@@ -42,6 +48,14 @@ public:
     MemoryResultWith<ScheduledCommitment> get_commitment_by_id(const ScheduleItemId& commitment_id) const;
     MemoryResultWith<SchedulingTaskCandidate> get_task_candidate_by_id(const ScheduleItemId& task_candidate_id) const;
     MemoryResultWith<SchedulingConstraintSet> get_constraint_set_by_id(const ConstraintSetId& constraint_set_id) const;
+    MemoryResultWith<std::vector<BehavioralProposal>> list_behavioral_proposals() const;
+    MemoryResultWith<std::vector<BehavioralStateSnapshot>> list_recent_behavioral_state_snapshots(std::size_t max_records) const;
+    MemoryResultWith<std::vector<BehavioralBacklogItem>> list_behavioral_backlog_items() const;
+    MemoryResultWith<std::vector<BehavioralInterventionRecord>> list_behavioral_interventions(const std::string& status_filter, const std::optional<TimestampString>& due_by) const;
+    MemoryResultWith<BehavioralProposal> get_behavioral_proposal_by_id(const BehavioralProposalId& proposal_id) const;
+    MemoryResultWith<BehavioralTriageDecision> get_behavioral_decision_by_id(const BehavioralDecisionId& decision_id) const;
+    MemoryResultWith<BehavioralBacklogItem> get_behavioral_backlog_item_by_proposal_id(const BehavioralProposalId& proposal_id) const;
+    MemoryResultWith<BehavioralMemorySummary> get_behavioral_memory_summary() const;
 
 private:
     IMemoryStore& store_;

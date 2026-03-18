@@ -1,6 +1,7 @@
 #pragma once
 
 #include "control_plane/control_plane.hpp"
+#include "coordination/behavioral_triage_module.hpp"
 #include "coordination/scheduling_coordination_module.hpp"
 #include "core/contracts.hpp"
 #include "core/memory.hpp"
@@ -19,6 +20,8 @@ enum class ApplicationRunMode {
     Status,
     ListModules,
     ScheduleHealthCheck,
+    BehavioralHealthCheck,
+    BehavioralListBacklog,
     BootstrapCheck
 };
 
@@ -56,6 +59,7 @@ struct ApplicationRuntime {
     integration::IntegrationConfigurationRepository integration_repository;
     control_plane::ModuleRegistry module_registry;
     std::shared_ptr<coordination::SchedulingCoordinationModule> scheduling_module;
+    std::shared_ptr<coordination::BehavioralTriageModule> behavioral_module;
     control_plane::ControlPlane control_plane;
 
     explicit ApplicationRuntime(const ApplicationBootstrapConfig& config);

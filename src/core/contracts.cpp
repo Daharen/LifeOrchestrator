@@ -78,6 +78,11 @@ LO_SWITCH_TO_STRING(EventCategory, value,
     case EventCategory::SchedulingConflictDetected: return "SchedulingConflictDetected";
     case EventCategory::SchedulingProposalGenerated: return "SchedulingProposalGenerated";
     case EventCategory::SchedulingProposalCommitted: return "SchedulingProposalCommitted";
+    case EventCategory::BehavioralStateRecorded: return "BehavioralStateRecorded";
+    case EventCategory::BehavioralProposalTriaged: return "BehavioralProposalTriaged";
+    case EventCategory::BehavioralDecisionPersisted: return "BehavioralDecisionPersisted";
+    case EventCategory::BehavioralBacklogUpdated: return "BehavioralBacklogUpdated";
+    case EventCategory::BehavioralInterventionScheduled: return "BehavioralInterventionScheduled";
     case EventCategory::ApplicationBootstrapStarted: return "ApplicationBootstrapStarted";
     case EventCategory::ApplicationBootstrapCompleted: return "ApplicationBootstrapCompleted";
     case EventCategory::ApplicationBootstrapFailed: return "ApplicationBootstrapFailed";

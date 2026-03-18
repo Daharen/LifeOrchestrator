@@ -28,6 +28,8 @@ ApplicationRunMode parse_run_mode(const std::string& value) {
     if (value == "status") return ApplicationRunMode::Status;
     if (value == "list-modules") return ApplicationRunMode::ListModules;
     if (value == "schedule-health-check") return ApplicationRunMode::ScheduleHealthCheck;
+    if (value == "behavioral-health-check") return ApplicationRunMode::BehavioralHealthCheck;
+    if (value == "behavioral-list-backlog") return ApplicationRunMode::BehavioralListBacklog;
     return ApplicationRunMode::BootstrapCheck;
 }
 
@@ -36,6 +38,8 @@ std::string run_mode_name(ApplicationRunMode mode) {
         case ApplicationRunMode::Status: return "status";
         case ApplicationRunMode::ListModules: return "list-modules";
         case ApplicationRunMode::ScheduleHealthCheck: return "schedule-health-check";
+        case ApplicationRunMode::BehavioralHealthCheck: return "behavioral-health-check";
+        case ApplicationRunMode::BehavioralListBacklog: return "behavioral-list-backlog";
         case ApplicationRunMode::BootstrapCheck: return "bootstrap-check";
     }
     return "bootstrap-check";
@@ -59,6 +63,7 @@ ApplicationRuntime::ApplicationRuntime(const ApplicationBootstrapConfig& bootstr
       memory_service(memory_store),
       integration_repository(bootstrap_config.data_root_path),
       scheduling_module(std::make_shared<coordination::SchedulingCoordinationModule>(&memory_service)),
+      behavioral_module(std::make_shared<coordination::BehavioralTriageModule>(&memory_service)),
       control_plane(module_registry, event_logger) {}
 
 ApplicationBootstrapResult resolve_bootstrap_config(const std::vector<std::string>& args,
@@ -81,7 +86,7 @@ ApplicationBootstrapResult resolve_bootstrap_config(const std::vector<std::strin
 
     for (std::size_t i = 0; i < args.size(); ++i) {
         const auto& arg = args[i];
-        if (arg == "status" || arg == "list-modules" || arg == "schedule-health-check" || arg == "bootstrap-check") {
+        if (arg == "status" || arg == "list-modules" || arg == "schedule-health-check" || arg == "behavioral-health-check" || arg == "behavioral-list-backlog" || arg == "bootstrap-check") {
             command = arg;
             command_set = true;
             continue;
@@ -124,7 +129,7 @@ ApplicationBootstrapResult resolve_bootstrap_config(const std::vector<std::strin
                 {}};
     }
 
-    if (command != "status" && command != "list-modules" && command != "schedule-health-check" && command != "bootstrap-check") {
+    if (command != "status" && command != "list-modules" && command != "schedule-health-check" && command != "behavioral-health-check" && command != "behavioral-list-backlog" && command != "bootstrap-check") {
         return {false,
                 ApplicationExitCode::CommandValidationFailure,
                 "Unknown command: " + command,
@@ -144,7 +149,7 @@ ApplicationBootstrapResult resolve_bootstrap_config(const std::vector<std::strin
 }
 
 std::vector<std::shared_ptr<modules::IModule>> build_runtime_modules(ApplicationRuntime& runtime) {
-    return {runtime.scheduling_module};
+    return {runtime.behavioral_module, runtime.scheduling_module};
 }
 
 ApplicationBootstrapResult initialize_runtime(ApplicationRuntime& runtime) {
@@ -260,6 +265,37 @@ ApplicationExitCode execute_command(ApplicationRuntime& runtime,
                 }
             }
             return complete(ApplicationExitCode::Success, "List modules command completed.");
+        }
+        case ApplicationRunMode::BehavioralHealthCheck: {
+            const auto high_state = runtime.control_plane.dispatch({"app-behavior-high-state", "behavioral.record_state", "life_orchestrator_app", core::RiskTier::Suggestive, {{"behavioral_state_snapshot_id", "state.app.high"}, {"active_intervention_count", "0"}, {"backlog_count", "0"}, {"schedule_density_score", "0.2"}, {"recent_compliance_rate", "0.9"}, {"recent_failure_frequency", "0.1"}, {"fatigue_score", "0.2"}, {"stress_score", "0.2"}}, core::current_timestamp_utc()});
+            const auto approved = runtime.control_plane.dispatch({"app-behavior-triage-high", "behavioral.triage_proposals", "life_orchestrator_app", core::RiskTier::Suggestive, {{"proposal_count", "1"}, {"proposal_id", "proposal.app.approved"}, {"proposal_type", "HabitChange"}, {"title", "Drink water"}, {"priority", "High"}, {"estimated_behavioral_effort", "1"}, {"expected_benefit", "5"}, {"earliest_presentation_time", "2026-03-18T09:00:00.000Z"}}, core::current_timestamp_utc()});
+            const auto low_state = runtime.control_plane.dispatch({"app-behavior-low-state", "behavioral.record_state", "life_orchestrator_app", core::RiskTier::Suggestive, {{"behavioral_state_snapshot_id", "state.app.low"}, {"active_intervention_count", "1"}, {"backlog_count", "4"}, {"schedule_density_score", "0.8"}, {"recent_compliance_rate", "0.4"}, {"recent_failure_frequency", "0.7"}, {"fatigue_score", "0.7"}, {"stress_score", "0.8"}}, core::current_timestamp_utc()});
+            const auto deferred = runtime.control_plane.dispatch({"app-behavior-triage-low", "behavioral.triage_proposals", "life_orchestrator_app", core::RiskTier::Suggestive, {{"proposal_count", "1"}, {"proposal_id", "proposal.app.deferred"}, {"proposal_type", "AutomationAdoption"}, {"title", "Automate inbox cleanup"}, {"priority", "High"}, {"estimated_behavioral_effort", "8"}, {"expected_benefit", "16"}, {"earliest_presentation_time", "2026-03-19T09:00:00.000Z"}}, core::current_timestamp_utc()});
+            const auto interventions = runtime.control_plane.dispatch({"app-behavior-list-interventions", "behavioral.list_next_interventions", "life_orchestrator_app", core::RiskTier::Suggestive, {{"status", "Approved"}}, core::current_timestamp_utc()});
+            const auto backlog = runtime.control_plane.dispatch({"app-behavior-list-backlog", "behavioral.list_backlog", "life_orchestrator_app", core::RiskTier::Suggestive, {}, core::current_timestamp_utc()});
+            const auto summary = runtime.memory_service.get_behavioral_memory_summary();
+            if (high_state.status != core::ExecutionStatus::Succeeded || approved.status != core::ExecutionStatus::Succeeded || low_state.status != core::ExecutionStatus::Succeeded || deferred.status != core::ExecutionStatus::Succeeded || interventions.status != core::ExecutionStatus::Succeeded || backlog.status != core::ExecutionStatus::Succeeded || !summary.ok) {
+                error << "behavioral_health_check=failed\n";
+                return complete(ApplicationExitCode::RuntimeOperationFailure, "Behavioral health check failed.");
+            }
+            runtime.memory_store.persist_to_disk();
+            output << "behavioral_health_check=ok\n"
+                   << "approved_count=" << approved.output_data.at("approved_count") << '\n'
+                   << "backlog_count=" << backlog.output_data.at("backlog_count") << '\n'
+                   << "intervention_count=" << interventions.output_data.at("intervention_count") << '\n'
+                   << "memory_proposal_count=" << summary.value->proposal_count << '\n';
+            return complete(ApplicationExitCode::Success, "Behavioral health check completed.");
+        }
+        case ApplicationRunMode::BehavioralListBacklog: {
+            const auto backlog = runtime.control_plane.dispatch({"app-behavior-list-backlog", "behavioral.list_backlog", "life_orchestrator_app", core::RiskTier::Suggestive, {}, core::current_timestamp_utc()});
+            if (backlog.status != core::ExecutionStatus::Succeeded) {
+                error << "behavioral_list_backlog=failed\nmessage=" << backlog.message << '\n';
+                return complete(ApplicationExitCode::RuntimeOperationFailure, backlog.message);
+            }
+            output << "behavioral_list_backlog=ok\n"
+                   << "backlog_count=" << backlog.output_data.at("backlog_count") << '\n'
+                   << "first_backlog_item_id=" << backlog.output_data.at("first_backlog_item_id") << '\n';
+            return complete(ApplicationExitCode::Success, "Behavioral backlog command completed.");
         }
         case ApplicationRunMode::BootstrapCheck: {
             const bool event_log_exists = std::filesystem::exists(runtime.config.events_file_path);

@@ -29,6 +29,11 @@ MemoryResult MemoryService::upsert_constraint_set(const SchedulingConstraintSet&
 MemoryResult MemoryService::append_proposal(const SchedulingProposal& record) { return store_.append_proposal(record); }
 MemoryResult MemoryService::append_decision(const SchedulingDecisionRecord& record) { return store_.append_decision(record); }
 MemoryResult MemoryService::append_conflict(const SchedulingConflict& record) { return store_.append_conflict(record); }
+MemoryResult MemoryService::append_behavioral_proposal(const BehavioralProposal& record) { return store_.append_behavioral_proposal(record); }
+MemoryResult MemoryService::append_behavioral_state_snapshot(const BehavioralStateSnapshot& record) { return store_.append_behavioral_state_snapshot(record); }
+MemoryResult MemoryService::append_behavioral_decision(const BehavioralTriageDecision& record) { return store_.append_behavioral_decision(record); }
+MemoryResult MemoryService::upsert_behavioral_backlog_item(const BehavioralBacklogItem& record) { return store_.upsert_behavioral_backlog_item(record); }
+MemoryResult MemoryService::append_behavioral_intervention(const BehavioralInterventionRecord& record) { return store_.append_behavioral_intervention(record); }
 MemoryResultWith<std::vector<ScheduledCommitment>> MemoryService::list_commitments_in_window(const TimestampString& start_time, const TimestampString& end_time) const { return store_.list_commitments_in_window(start_time, end_time); }
 MemoryResultWith<std::vector<SchedulingTaskCandidate>> MemoryService::list_task_candidates_by_status_and_range(ScheduleStatus status, const TimestampString& start_time, const TimestampString& end_time) const { return store_.list_task_candidates_by_status_and_range(status, start_time, end_time); }
 MemoryResultWith<std::vector<AvailabilityWindow>> MemoryService::list_availability_windows_in_window(const TimestampString& start_time, const TimestampString& end_time) const { return store_.list_availability_windows_in_window(start_time, end_time); }
@@ -38,5 +43,13 @@ MemoryResultWith<SchedulingProposal> MemoryService::get_proposal_by_id(const Pro
 MemoryResultWith<ScheduledCommitment> MemoryService::get_commitment_by_id(const ScheduleItemId& commitment_id) const { return store_.get_commitment_by_id(commitment_id); }
 MemoryResultWith<SchedulingTaskCandidate> MemoryService::get_task_candidate_by_id(const ScheduleItemId& task_candidate_id) const { return store_.get_task_candidate_by_id(task_candidate_id); }
 MemoryResultWith<SchedulingConstraintSet> MemoryService::get_constraint_set_by_id(const ConstraintSetId& constraint_set_id) const { return store_.get_constraint_set_by_id(constraint_set_id); }
+MemoryResultWith<std::vector<BehavioralProposal>> MemoryService::list_behavioral_proposals() const { return store_.list_behavioral_proposals(); }
+MemoryResultWith<std::vector<BehavioralStateSnapshot>> MemoryService::list_recent_behavioral_state_snapshots(std::size_t max_records) const { return store_.list_recent_behavioral_state_snapshots(max_records); }
+MemoryResultWith<std::vector<BehavioralBacklogItem>> MemoryService::list_behavioral_backlog_items() const { return store_.list_behavioral_backlog_items(); }
+MemoryResultWith<std::vector<BehavioralInterventionRecord>> MemoryService::list_behavioral_interventions(const std::string& status_filter, const std::optional<TimestampString>& due_by) const { return store_.list_behavioral_interventions(status_filter, due_by); }
+MemoryResultWith<BehavioralProposal> MemoryService::get_behavioral_proposal_by_id(const BehavioralProposalId& proposal_id) const { return store_.get_behavioral_proposal_by_id(proposal_id); }
+MemoryResultWith<BehavioralTriageDecision> MemoryService::get_behavioral_decision_by_id(const BehavioralDecisionId& decision_id) const { return store_.get_behavioral_decision_by_id(decision_id); }
+MemoryResultWith<BehavioralBacklogItem> MemoryService::get_behavioral_backlog_item_by_proposal_id(const BehavioralProposalId& proposal_id) const { return store_.get_behavioral_backlog_item_by_proposal_id(proposal_id); }
+MemoryResultWith<BehavioralMemorySummary> MemoryService::get_behavioral_memory_summary() const { return store_.get_behavioral_memory_summary(); }
 
 }  // namespace life_orchestrator::core

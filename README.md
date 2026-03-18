@@ -24,3 +24,8 @@ Examples from the repo root:
 - On Windows: `run.bat list-modules`
 - On Windows: `run.bat bootstrap-check`
 - On Windows: `run.bat schedule-health-check`
+
+
+## Additional validation commands
+- `life_orchestrator_app behavioral-health-check`
+- `life_orchestrator_app behavioral-list-backlog`
