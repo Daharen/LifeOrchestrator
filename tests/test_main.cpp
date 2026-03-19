@@ -475,6 +475,118 @@ void test_behavioral_backlog_and_reevaluation_visibility_defaults() {
     assert_true(reevaluations_text.find("notes_or_rationale=none") != std::string::npos, "behavioral-list-reevaluations should emit default notes");
 }
 
+void test_scheduling_candidate_cli_bridge() {
+    const std::filesystem::path root = "artifacts/app_scheduling_candidates";
+    std::filesystem::remove_all(root);
+
+    std::ostringstream record_out;
+    std::ostringstream record_err;
+    auto rc = life_orchestrator::app::run_application({"behavioral-record-state", "--data-root=" + root.string(), "--quiet-startup", "--available-capacity", "8", "--stress-level", "2", "--cognitive-load", "3", "--motivation", "7", "--recovery-status", "8", "--now", "2026-03-19T09:00:00.000Z"}, record_out, record_err, "", std::filesystem::current_path());
+    assert_true(rc == 0, "behavioral-record-state should succeed for scheduling candidate test");
+
+    std::ostringstream upsert_out;
+    std::ostringstream upsert_err;
+    rc = life_orchestrator::app::run_application({"procedural-upsert-activity", "--data-root=" + root.string(), "--quiet-startup", "--activity-id", "activity.schedule_bridge", "--title", "Schedule bridge", "--domain-source", "planning", "--frequency", "daily", "--duration-minutes", "30", "--effort", "8", "--outcome-value", "3", "--repeatable", "1", "--now", "2026-03-19T09:00:00.000Z"}, upsert_out, upsert_err, "", std::filesystem::current_path());
+    assert_true(rc == 0, "procedural-upsert-activity should succeed for scheduling candidate test");
+
+    std::ostringstream audit_out;
+    std::ostringstream audit_err;
+    rc = life_orchestrator::app::run_application({"procedural-run-audit", "--data-root=" + root.string(), "--quiet-startup", "--now", "2026-03-19T09:00:00.000Z"}, audit_out, audit_err, "", std::filesystem::current_path());
+    assert_true(rc == 0, "procedural-run-audit should succeed for scheduling candidate test");
+
+    std::ostringstream generate_out;
+    std::ostringstream generate_err;
+    rc = life_orchestrator::app::run_application({"scheduling-generate-candidates", "--data-root=" + root.string(), "--quiet-startup", "--now", "2026-03-19T09:15:00.000Z"}, generate_out, generate_err, "", std::filesystem::current_path());
+    assert_true(rc == 0, "scheduling-generate-candidates should succeed");
+    const auto generate_text = generate_out.str();
+    assert_true(generate_text.find("scheduling_generate_candidates=ok") != std::string::npos, "scheduling candidate generation should emit ok");
+    assert_true(generate_text.find("intervention_count=1") != std::string::npos, "scheduling candidate generation should count interventions");
+    assert_true(generate_text.find("candidate_count=1") != std::string::npos, "scheduling candidate generation should create candidate");
+    assert_true(generate_text.find("deferred_count=0") != std::string::npos, "scheduling candidate generation should expose deferred count");
+
+    std::ostringstream list_out;
+    std::ostringstream list_err;
+    rc = life_orchestrator::app::run_application({"scheduling-list-candidates", "--data-root=" + root.string(), "--quiet-startup"}, list_out, list_err, "", std::filesystem::current_path());
+    assert_true(rc == 0, "scheduling-list-candidates should succeed");
+    const auto list_text = list_out.str();
+    assert_true(list_text.find("scheduling_list_candidates=ok") != std::string::npos, "scheduling candidate list should emit ok");
+    assert_true(list_text.find("candidate_id=candidate.intervention.") != std::string::npos, "scheduling candidate list should emit deterministic candidate ids");
+    assert_true(list_text.find("source_intervention_id=intervention.") != std::string::npos, "scheduling candidate list should expose intervention lineage");
+    assert_true(list_text.find("source_proposal_id=proposal.") != std::string::npos, "scheduling candidate list should expose proposal lineage");
+    assert_true(list_text.find("source_audit_run_id=audit.") != std::string::npos, "scheduling candidate list should expose audit lineage");
+    assert_true(list_text.find("source_activity_id=activity.schedule_bridge") != std::string::npos, "scheduling candidate list should expose activity lineage");
+    assert_true(list_text.find("estimated_duration_minutes=30") != std::string::npos, "scheduling candidate list should derive deterministic duration");
+    assert_true(list_text.find("urgency=High") != std::string::npos || list_text.find("urgency=Critical") != std::string::npos, "scheduling candidate list should expose urgency");
+    assert_true(list_text.find("scheduling_window_hint=") != std::string::npos, "scheduling candidate list should expose window hint");
+    assert_true(list_text.find("recommended_time_of_day=") != std::string::npos, "scheduling candidate list should expose time-of-day");
+    assert_true(list_text.find("recommended_day_span=") != std::string::npos, "scheduling candidate list should expose day span");
+    assert_true(list_text.find("rationale=") != std::string::npos, "scheduling candidate list should expose rationale");
+    assert_true(list_text.find("status=candidate") != std::string::npos, "scheduling candidate list should expose candidate status");
+    assert_in_order(list_text, {"candidate_id=", "source_intervention_id=", "source_proposal_id=", "source_audit_run_id=", "source_activity_id=", "estimated_duration_minutes=", "urgency=", "scheduling_window_hint=", "recommended_time_of_day=", "recommended_day_span=", "rationale=", "status="}, "scheduling candidate list should emit stable fields");
+
+    std::ostringstream generate_repeat_out;
+    std::ostringstream generate_repeat_err;
+    rc = life_orchestrator::app::run_application({"scheduling-generate-candidates", "--data-root=" + root.string(), "--quiet-startup", "--now", "2026-03-19T09:15:00.000Z"}, generate_repeat_out, generate_repeat_err, "", std::filesystem::current_path());
+    assert_true(rc == 0, "re-running scheduling-generate-candidates should succeed");
+
+    std::ostringstream list_repeat_out;
+    std::ostringstream list_repeat_err;
+    rc = life_orchestrator::app::run_application({"scheduling-list-candidates", "--data-root=" + root.string(), "--quiet-startup"}, list_repeat_out, list_repeat_err, "", std::filesystem::current_path());
+    assert_true(rc == 0, "re-listing scheduling candidates should succeed");
+    assert_true(list_repeat_out.str().find("candidate_count=1") != std::string::npos, "unchanged scheduling candidate reruns should remain idempotent");
+
+    std::ostringstream status_out;
+    std::ostringstream status_err;
+    rc = life_orchestrator::app::run_application({"status", "--data-root=" + root.string(), "--quiet-startup"}, status_out, status_err, "", std::filesystem::current_path());
+    assert_true(rc == 0, "general status should succeed for scheduling candidate test");
+    assert_true(status_out.str().find("scheduling_candidate_count=1") != std::string::npos, "general status should expose scheduling candidate count");
+}
+
+void test_scheduling_candidate_default_emission_and_backward_compatibility() {
+    const std::filesystem::path root = "artifacts/scheduling_candidate_defaults";
+    std::filesystem::remove_all(root);
+    std::filesystem::create_directories(root / "memory" / "scheduling");
+    {
+        std::ofstream out(root / "memory" / "scheduling" / "candidates.ndjson");
+        assert_true(out.is_open(), "legacy scheduling candidates file should open");
+        out << "candidate_id=candidate.legacy;source_intervention_id=intervention.legacy\n";
+    }
+
+    life_orchestrator::control_plane::EventLogger logger{"artifacts/events/scheduling_candidate_defaults.ndjson"};
+    std::filesystem::remove(logger.log_path());
+    life_orchestrator::core::FileMemoryStore store{root, &logger};
+    assert_true(store.load_from_disk().ok, "legacy scheduling candidate load should succeed");
+    auto candidates = store.list_scheduling_candidate_records();
+    assert_true(candidates.ok && candidates.value->size() == 1, "legacy scheduling candidate should reload");
+    const auto& candidate = candidates.value->front();
+    assert_true(candidate.source_proposal_id == "none", "legacy scheduling candidate should default proposal lineage");
+    assert_true(candidate.source_audit_run_id == "none", "legacy scheduling candidate should default audit lineage");
+    assert_true(candidate.source_activity_id == "none", "legacy scheduling candidate should default activity lineage");
+    assert_true(candidate.estimated_duration_minutes == 0, "legacy scheduling candidate should default duration");
+    assert_true(candidate.urgency == "Normal", "legacy scheduling candidate should default urgency");
+    assert_true(candidate.scheduling_window_hint == "unspecified", "legacy scheduling candidate should default window hint");
+    assert_true(candidate.recommended_time_of_day == "unspecified", "legacy scheduling candidate should default time of day");
+    assert_true(candidate.recommended_day_span == "unspecified", "legacy scheduling candidate should default day span");
+    assert_true(candidate.rationale == "none", "legacy scheduling candidate should default rationale");
+    assert_true(candidate.status == life_orchestrator::core::SchedulingCandidateStatus::Candidate, "legacy scheduling candidate should default status");
+
+    std::ostringstream list_out;
+    std::ostringstream list_err;
+    auto rc = life_orchestrator::app::run_application({"scheduling-list-candidates", "--data-root=" + root.string(), "--quiet-startup"}, list_out, list_err, "", std::filesystem::current_path());
+    assert_true(rc == 0, "scheduling-list-candidates should succeed for legacy candidate data");
+    const auto text = list_out.str();
+    assert_true(text.find("source_proposal_id=none") != std::string::npos, "legacy candidate list should emit default proposal lineage");
+    assert_true(text.find("source_audit_run_id=none") != std::string::npos, "legacy candidate list should emit default audit lineage");
+    assert_true(text.find("source_activity_id=none") != std::string::npos, "legacy candidate list should emit default activity lineage");
+    assert_true(text.find("estimated_duration_minutes=0") != std::string::npos, "legacy candidate list should emit default duration");
+    assert_true(text.find("urgency=Normal") != std::string::npos, "legacy candidate list should emit default urgency");
+    assert_true(text.find("scheduling_window_hint=unspecified") != std::string::npos, "legacy candidate list should emit default window hint");
+    assert_true(text.find("recommended_time_of_day=unspecified") != std::string::npos, "legacy candidate list should emit default time-of-day");
+    assert_true(text.find("recommended_day_span=unspecified") != std::string::npos, "legacy candidate list should emit default day span");
+    assert_true(text.find("rationale=none") != std::string::npos, "legacy candidate list should emit default rationale");
+    assert_true(text.find("status=candidate") != std::string::npos, "legacy candidate list should emit default status");
+}
+
 void test_runtime_hygiene_ignore_file() {
     auto gitignore_path = std::filesystem::exists(".gitignore") ? std::filesystem::path{".gitignore"} : std::filesystem::path{"../.gitignore"};
     std::ifstream in{gitignore_path};
@@ -497,6 +609,8 @@ int main() {
         test_procedural_list_proposals_emits_default_values();
         test_behavioral_cli_operational_surface();
         test_behavioral_backlog_and_reevaluation_visibility_defaults();
+        test_scheduling_candidate_cli_bridge();
+        test_scheduling_candidate_default_emission_and_backward_compatibility();
         test_runtime_hygiene_ignore_file();
     } catch (const std::exception& e) {
         std::cerr << "Test failure: " << e.what() << '\n';

@@ -136,6 +136,12 @@ LO_SWITCH_TO_STRING(SchedulingOperationType, value,
     case SchedulingOperationType::CommitProposal: return "CommitProposal";
     case SchedulingOperationType::ListScheduleWindow: return "ListScheduleWindow";)
 
+LO_SWITCH_TO_STRING(SchedulingCandidateStatus, value,
+    case SchedulingCandidateStatus::Candidate: return "candidate";
+    case SchedulingCandidateStatus::Deferred: return "deferred";
+    case SchedulingCandidateStatus::ScheduledProposalGenerated: return "scheduled_proposal_generated";
+    case SchedulingCandidateStatus::Rejected: return "rejected";)
+
 TimestampString current_timestamp_utc() {
     return format_timestamp<std::chrono::system_clock>(std::chrono::system_clock::now());
 }

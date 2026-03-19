@@ -4,6 +4,7 @@
 #include <cstdlib>
 #include <sstream>
 #include <stdexcept>
+#include <unordered_map>
 
 namespace life_orchestrator::app {
 namespace {
@@ -36,6 +37,8 @@ ApplicationRunMode parse_run_mode(const std::string& value) {
     if (value == "behavioral-reevaluate-backlog") return ApplicationRunMode::BehavioralReevaluateBacklog;
     if (value == "behavioral-list-reevaluations") return ApplicationRunMode::BehavioralListReevaluations;
     if (value == "behavioral-status") return ApplicationRunMode::BehavioralStatus;
+    if (value == "scheduling-generate-candidates") return ApplicationRunMode::SchedulingGenerateCandidates;
+    if (value == "scheduling-list-candidates") return ApplicationRunMode::SchedulingListCandidates;
     if (value == "procedural-health-check") return ApplicationRunMode::ProceduralHealthCheck;
     if (value == "procedural-list-proposals") return ApplicationRunMode::ProceduralListProposals;
     if (value == "procedural-upsert-activity") return ApplicationRunMode::ProceduralUpsertActivity;
@@ -57,6 +60,8 @@ std::string run_mode_name(ApplicationRunMode mode) {
         case ApplicationRunMode::BehavioralReevaluateBacklog: return "behavioral-reevaluate-backlog";
         case ApplicationRunMode::BehavioralListReevaluations: return "behavioral-list-reevaluations";
         case ApplicationRunMode::BehavioralStatus: return "behavioral-status";
+        case ApplicationRunMode::SchedulingGenerateCandidates: return "scheduling-generate-candidates";
+        case ApplicationRunMode::SchedulingListCandidates: return "scheduling-list-candidates";
         case ApplicationRunMode::ProceduralHealthCheck: return "procedural-health-check";
         case ApplicationRunMode::ProceduralListProposals: return "procedural-list-proposals";
         case ApplicationRunMode::ProceduralUpsertActivity: return "procedural-upsert-activity";
@@ -79,7 +84,7 @@ std::string value_after_equals(const std::string& arg) {
 
 bool is_command_name(const std::string& value) {
     static const std::vector<std::string> commands = {
-        "status", "list-modules", "schedule-health-check", "behavioral-health-check", "behavioral-list-backlog", "behavioral-record-state", "behavioral-list-interventions", "behavioral-reevaluate-backlog", "behavioral-list-reevaluations", "behavioral-status",
+        "status", "list-modules", "schedule-health-check", "behavioral-health-check", "behavioral-list-backlog", "behavioral-record-state", "behavioral-list-interventions", "behavioral-reevaluate-backlog", "behavioral-list-reevaluations", "behavioral-status", "scheduling-generate-candidates", "scheduling-list-candidates",
         "procedural-health-check", "procedural-list-proposals", "procedural-upsert-activity", "procedural-list-activities",
         "procedural-run-audit", "procedural-list-audit-runs", "bootstrap-check"};
     return std::find(commands.begin(), commands.end(), value) != commands.end();
@@ -160,6 +165,72 @@ void emit_kv_block(std::ostream& output, const core::StringMap& fields) {
     std::vector<std::pair<std::string, std::string>> ordered(fields.begin(), fields.end());
     std::sort(ordered.begin(), ordered.end());
     emit_ordered_kv_block(output, ordered);
+}
+
+std::string default_if_empty(const std::string& value, const std::string& fallback) {
+    return value.empty() ? fallback : value;
+}
+
+int safe_parse_int(const std::string& value, int fallback) {
+    if (value.empty()) return fallback;
+    try {
+        return std::stoi(value);
+    } catch (...) {
+        return fallback;
+    }
+}
+
+std::string normalize_urgency(const std::string& value) {
+    if (value == "Critical" || value == "critical") return "Critical";
+    if (value == "High" || value == "high") return "High";
+    if (value == "Low" || value == "low") return "Low";
+    return "Normal";
+}
+
+std::string recommended_time_of_day(const std::string& scheduling_window_hint) {
+    if (scheduling_window_hint == "next_24_hours") return "morning";
+    if (scheduling_window_hint == "next_3_days") return "midday";
+    return "flexible";
+}
+
+std::string recommended_day_span(const std::string& scheduling_window_hint) {
+    if (scheduling_window_hint == "next_24_hours") return "1";
+    if (scheduling_window_hint == "next_3_days") return "3";
+    return "7";
+}
+
+std::string candidate_id_for_intervention(const core::BehavioralInterventionRecord& intervention) {
+    return "candidate." + intervention.intervention_id;
+}
+
+core::SchedulingCandidateRecord build_scheduling_candidate(const core::BehavioralInterventionRecord& intervention,
+                                                           const std::optional<core::BehavioralBacklogItem>& backlog_item,
+                                                           const std::string& now) {
+    const auto urgency = normalize_urgency(intervention.priority);
+    const auto duration = std::max(0, safe_parse_int(intervention.effort_estimate, 0) * 15);
+    const bool has_schedule_signal = intervention.status == "Approved" || intervention.status == "ScheduledPrompt" || intervention.status == "ApprovedForScheduling";
+    const bool schedule_prompt = intervention.presentation_mode == core::InterventionPresentationMode::ScheduledPrompt;
+    const bool high_urgency = urgency == "Critical" || urgency == "High";
+    const auto window_hint = schedule_prompt ? "next_24_hours" : (high_urgency ? "next_3_days" : "unspecified");
+    const auto status = has_schedule_signal && (schedule_prompt || high_urgency)
+                            ? core::SchedulingCandidateStatus::Candidate
+                            : (intervention.status == "Rejected" ? core::SchedulingCandidateStatus::Rejected : core::SchedulingCandidateStatus::Deferred);
+    return {candidate_id_for_intervention(intervention),
+            intervention.intervention_id,
+            default_if_empty(intervention.source_proposal_id, backlog_item ? default_if_empty(backlog_item->source_proposal_id, "none") : "none"),
+            default_if_empty(intervention.source_audit_run_id, backlog_item ? default_if_empty(backlog_item->source_audit_run_id, "none") : "none"),
+            default_if_empty(intervention.source_activity_id, backlog_item ? default_if_empty(backlog_item->source_activity_id, "none") : "none"),
+            duration,
+            urgency,
+            window_hint,
+            recommended_time_of_day(window_hint),
+            recommended_day_span(window_hint),
+            default_if_empty(intervention.rationale, backlog_item ? default_if_empty(backlog_item->rationale, "none") : "none"),
+            status,
+            "coordination.scheduling",
+            now,
+            now,
+            1};
 }
 
 }  // namespace
@@ -346,6 +417,7 @@ ApplicationExitCode execute_command(ApplicationRuntime& runtime,
                    << "behavioral_state_snapshot_count=" << summary.value->behavioral_state_snapshot_count << '\n'
                    << "behavioral_backlog_count=" << summary.value->behavioral_backlog_count << '\n'
                    << "behavioral_intervention_count=" << summary.value->behavioral_intervention_count << '\n'
+                   << "scheduling_candidate_count=" << summary.value->scheduling_candidate_count << '\n'
                    << "behavioral_reevaluation_artifact_count=" << summary.value->behavioral_reevaluation_artifact_count << '\n';
             return complete(ApplicationExitCode::Success, "Status command completed.");
         }
@@ -511,6 +583,79 @@ ApplicationExitCode execute_command(ApplicationRuntime& runtime,
                    << "deferred_count=" << deferred << '\n'
                    << "rejected_count=" << rejected << '\n';
             return complete(ApplicationExitCode::Success, "Behavioral status completed.");
+        }
+        case ApplicationRunMode::SchedulingGenerateCandidates: {
+            const auto interventions = runtime.memory_service.list_behavioral_interventions("", std::nullopt);
+            const auto backlog = runtime.memory_service.list_behavioral_backlog_items();
+            if (!interventions.ok || !backlog.ok) {
+                error << "scheduling_generate_candidates=failed\n";
+                return complete(ApplicationExitCode::RuntimeOperationFailure, "Scheduling candidate generation failed.");
+            }
+            std::unordered_map<std::string, core::BehavioralBacklogItem> backlog_by_proposal_id;
+            for (const auto& item : *backlog.value) backlog_by_proposal_id[item.behavioral_proposal_id] = item;
+            std::size_t candidate_count = 0;
+            std::size_t deferred_count = 0;
+            const auto now = runtime.config.command_parameters.contains("now") ? runtime.config.command_parameters.at("now") : "1970-01-01T00:00:00.000Z";
+            for (const auto& intervention : *interventions.value) {
+                const auto backlog_it = backlog_by_proposal_id.find(intervention.behavioral_proposal_id);
+                const auto existing = runtime.memory_service.get_scheduling_candidate_record_by_id(candidate_id_for_intervention(intervention));
+                auto record = build_scheduling_candidate(intervention, backlog_it == backlog_by_proposal_id.end() ? std::nullopt : std::optional<core::BehavioralBacklogItem>(backlog_it->second), existing.ok ? existing.value->created_at : now);
+                if (existing.ok) {
+                    record.created_at = existing.value->created_at;
+                    record.version = existing.value->version;
+                    if (existing.value->source_intervention_id == record.source_intervention_id &&
+                        existing.value->source_proposal_id == record.source_proposal_id &&
+                        existing.value->source_audit_run_id == record.source_audit_run_id &&
+                        existing.value->source_activity_id == record.source_activity_id &&
+                        existing.value->estimated_duration_minutes == record.estimated_duration_minutes &&
+                        existing.value->urgency == record.urgency &&
+                        existing.value->scheduling_window_hint == record.scheduling_window_hint &&
+                        existing.value->recommended_time_of_day == record.recommended_time_of_day &&
+                        existing.value->recommended_day_span == record.recommended_day_span &&
+                        existing.value->rationale == record.rationale &&
+                        existing.value->status == record.status) {
+                        record.updated_at = existing.value->updated_at;
+                    } else {
+                        record.version = existing.value->version + 1;
+                    }
+                }
+                const auto persist = runtime.memory_service.upsert_scheduling_candidate_record(record);
+                if (!persist.ok) {
+                    error << "scheduling_generate_candidates=failed\nmessage=" << persist.message << '\n';
+                    return complete(ApplicationExitCode::RuntimeOperationFailure, persist.message);
+                }
+                if (record.status == core::SchedulingCandidateStatus::Candidate) ++candidate_count; else ++deferred_count;
+            }
+            runtime.memory_store.persist_to_disk();
+            output << "scheduling_generate_candidates=ok\n"
+                   << "intervention_count=" << interventions.value->size() << '\n'
+                   << "candidate_count=" << candidate_count << '\n'
+                   << "deferred_count=" << deferred_count << '\n';
+            return complete(ApplicationExitCode::Success, "Scheduling candidate generation completed.");
+        }
+        case ApplicationRunMode::SchedulingListCandidates: {
+            const auto candidates = runtime.memory_service.list_scheduling_candidate_records();
+            if (!candidates.ok) {
+                error << "scheduling_list_candidates=failed\nmessage=" << candidates.message << '\n';
+                return complete(ApplicationExitCode::RuntimeOperationFailure, candidates.message);
+            }
+            output << "scheduling_list_candidates=ok\n"
+                   << "candidate_count=" << candidates.value->size() << '\n';
+            for (const auto& candidate : *candidates.value) {
+                emit_ordered_kv_block(output, {{"candidate_id", candidate.candidate_id},
+                                               {"source_intervention_id", default_if_empty(candidate.source_intervention_id, "none")},
+                                               {"source_proposal_id", default_if_empty(candidate.source_proposal_id, "none")},
+                                               {"source_audit_run_id", default_if_empty(candidate.source_audit_run_id, "none")},
+                                               {"source_activity_id", default_if_empty(candidate.source_activity_id, "none")},
+                                               {"estimated_duration_minutes", std::to_string(candidate.estimated_duration_minutes)},
+                                               {"urgency", default_if_empty(candidate.urgency, "Normal")},
+                                               {"scheduling_window_hint", default_if_empty(candidate.scheduling_window_hint, "unspecified")},
+                                               {"recommended_time_of_day", default_if_empty(candidate.recommended_time_of_day, "unspecified")},
+                                               {"recommended_day_span", default_if_empty(candidate.recommended_day_span, "unspecified")},
+                                               {"rationale", default_if_empty(candidate.rationale, "none")},
+                                               {"status", core::to_string(candidate.status)}});
+            }
+            return complete(ApplicationExitCode::Success, "Scheduling list candidates completed.");
         }
         case ApplicationRunMode::ProceduralHealthCheck: {
             const auto state = runtime.control_plane.dispatch({"app-procedural-state", "behavioral.record_state", "life_orchestrator_app", core::RiskTier::Suggestive, {{"behavioral_state_snapshot_id", "state.procedural.health"}, {"captured_at", "2026-03-18T09:00:00.000Z"}, {"active_intervention_count", "0"}, {"backlog_count", "0"}, {"schedule_density_score", "0.2"}, {"recent_compliance_rate", "0.9"}, {"recent_failure_frequency", "0.1"}, {"fatigue_score", "0.2"}, {"stress_score", "0.2"}, {"decision_time", "2026-03-18T09:00:00.000Z"}}, "2026-03-18T09:00:00.000Z"});

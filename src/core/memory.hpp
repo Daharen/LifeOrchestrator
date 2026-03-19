@@ -217,6 +217,7 @@ struct MemorySummary {
     std::size_t integration_configuration_count;
     std::size_t scheduling_commitment_count;
     std::size_t scheduling_task_candidate_count;
+    std::size_t scheduling_candidate_count;
     std::size_t scheduling_window_count;
     std::size_t scheduling_constraint_count;
     std::size_t scheduling_proposal_count;
@@ -254,6 +255,7 @@ public:
 
     virtual MemoryResult upsert_scheduled_commitment(const ScheduledCommitment& record) = 0;
     virtual MemoryResult append_task_candidate(const SchedulingTaskCandidate& record) = 0;
+    virtual MemoryResult upsert_scheduling_candidate_record(const SchedulingCandidateRecord& record) = 0;
     virtual MemoryResult upsert_availability_window(const AvailabilityWindow& record) = 0;
     virtual MemoryResult upsert_constraint_set(const SchedulingConstraintSet& record) = 0;
     virtual MemoryResult append_proposal(const SchedulingProposal& record) = 0;
@@ -285,6 +287,8 @@ public:
     virtual MemoryResultWith<std::vector<ScheduledCommitment>> list_commitments_in_window(const TimestampString& start_time, const TimestampString& end_time) const = 0;
     virtual MemoryResultWith<std::vector<SchedulingTaskCandidate>> list_task_candidates_by_status_and_range(ScheduleStatus status, const TimestampString& start_time, const TimestampString& end_time) const = 0;
     virtual MemoryResultWith<std::vector<AvailabilityWindow>> list_availability_windows_in_window(const TimestampString& start_time, const TimestampString& end_time) const = 0;
+    virtual MemoryResultWith<std::vector<SchedulingCandidateRecord>> list_scheduling_candidate_records() const = 0;
+    virtual MemoryResultWith<SchedulingCandidateRecord> get_scheduling_candidate_record_by_id(const SchedulingCandidateId& candidate_id) const = 0;
     virtual MemoryResultWith<std::vector<SchedulingProposal>> list_proposals_for_task_candidate(const ScheduleItemId& task_candidate_id) const = 0;
     virtual MemoryResultWith<std::vector<SchedulingConflict>> list_conflicts(const TimestampString& start_time, const TimestampString& end_time, const std::optional<ScheduleItemId>& schedule_item_id) const = 0;
     virtual MemoryResultWith<SchedulingProposal> get_proposal_by_id(const ProposalId& proposal_id) const = 0;
@@ -328,6 +332,7 @@ public:
 
     MemoryResult upsert_scheduled_commitment(const ScheduledCommitment& record) override;
     MemoryResult append_task_candidate(const SchedulingTaskCandidate& record) override;
+    MemoryResult upsert_scheduling_candidate_record(const SchedulingCandidateRecord& record) override;
     MemoryResult upsert_availability_window(const AvailabilityWindow& record) override;
     MemoryResult upsert_constraint_set(const SchedulingConstraintSet& record) override;
     MemoryResult append_proposal(const SchedulingProposal& record) override;
@@ -358,6 +363,8 @@ public:
     MemoryResultWith<std::vector<ScheduledCommitment>> list_commitments_in_window(const TimestampString& start_time, const TimestampString& end_time) const override;
     MemoryResultWith<std::vector<SchedulingTaskCandidate>> list_task_candidates_by_status_and_range(ScheduleStatus status, const TimestampString& start_time, const TimestampString& end_time) const override;
     MemoryResultWith<std::vector<AvailabilityWindow>> list_availability_windows_in_window(const TimestampString& start_time, const TimestampString& end_time) const override;
+    MemoryResultWith<std::vector<SchedulingCandidateRecord>> list_scheduling_candidate_records() const override;
+    MemoryResultWith<SchedulingCandidateRecord> get_scheduling_candidate_record_by_id(const SchedulingCandidateId& candidate_id) const override;
     MemoryResultWith<std::vector<SchedulingProposal>> list_proposals_for_task_candidate(const ScheduleItemId& task_candidate_id) const override;
     MemoryResultWith<std::vector<SchedulingConflict>> list_conflicts(const TimestampString& start_time, const TimestampString& end_time, const std::optional<ScheduleItemId>& schedule_item_id) const override;
     MemoryResultWith<SchedulingProposal> get_proposal_by_id(const ProposalId& proposal_id) const override;
@@ -398,6 +405,7 @@ private:
     std::unordered_map<IntegrationConfigId, IntegrationConfigurationRecord> integration_configs_by_id_;
     std::unordered_map<ScheduleItemId, ScheduledCommitment> commitments_by_id_;
     std::unordered_map<ScheduleItemId, SchedulingTaskCandidate> task_candidates_by_id_;
+    std::unordered_map<SchedulingCandidateId, SchedulingCandidateRecord> scheduling_candidates_by_id_;
     std::unordered_map<WindowId, AvailabilityWindow> windows_by_id_;
     std::unordered_map<ConstraintSetId, SchedulingConstraintSet> constraint_sets_by_id_;
     std::unordered_map<ProposalId, SchedulingProposal> proposals_by_id_;
