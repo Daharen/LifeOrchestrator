@@ -723,6 +723,102 @@ void test_runtime_hygiene_ignore_file() {
     assert_true(buffer.str().find("runtime/") != std::string::npos, "runtime artifacts should be gitignored");
 }
 
+void test_operator_alias_resolution_and_suggestions() {
+    const std::filesystem::path root = "artifacts/operator_aliases";
+    std::filesystem::remove_all(root);
+
+    std::ostringstream alias_out;
+    std::ostringstream alias_err;
+    auto rc = life_orchestrator::app::run_application({"operator-query", "--data-root=" + root.string(), "--quiet-startup", "--input", "backlog"}, alias_out, alias_err, "", std::filesystem::current_path());
+    assert_true(rc == 0, "operator-query should resolve aliases before fallback");
+    assert_true(alias_out.str().find("behavioral_list_backlog=ok") != std::string::npos, "alias should map to deterministic backlog command");
+
+    std::ostringstream suggest_out;
+    std::ostringstream suggest_err;
+    rc = life_orchestrator::app::run_application({"suggest", "--data-root=" + root.string(), "--quiet-startup", "--input", "stat"}, suggest_out, suggest_err, "", std::filesystem::current_path());
+    assert_true(rc == 0, "suggest should succeed");
+    const auto suggestions = suggest_out.str();
+    assert_in_order(suggestions, {"suggestion=status", "suggestion=status=>status"}, "suggest should prefer exact deterministic commands before alias matches");
+
+    std::ostringstream aliases_out;
+    std::ostringstream aliases_err;
+    rc = life_orchestrator::app::run_application({"aliases", "--data-root=" + root.string(), "--quiet-startup"}, aliases_out, aliases_err, "", std::filesystem::current_path());
+    assert_true(rc == 0, "aliases should succeed");
+    assert_true(aliases_out.str().find("alias=backlog;command=behavioral-list-backlog") != std::string::npos, "aliases output should expose canonical alias mapping");
+}
+
+void test_integration_provider_persistence_redaction_and_visibility() {
+    const std::filesystem::path root = "artifacts/operator_provider";
+    std::filesystem::remove_all(root);
+
+    std::ostringstream set_out;
+    std::ostringstream set_err;
+    auto rc = life_orchestrator::app::run_application({"integration-set-provider", "--data-root=" + root.string(), "--quiet-startup", "--provider-name", "openai", "--api-key", "TEST_KEY_123", "--model-name", "gpt-5"}, set_out, set_err, "", std::filesystem::current_path());
+    assert_true(rc == 0, "integration-set-provider should succeed");
+    assert_true(std::filesystem::exists(root / "config" / "providers" / "openai.secret"), "provider secret should persist locally");
+
+    std::ostringstream show_out;
+    std::ostringstream show_err;
+    rc = life_orchestrator::app::run_application({"integration-show-provider", "--data-root=" + root.string(), "--quiet-startup", "--provider-name", "openai"}, show_out, show_err, "", std::filesystem::current_path());
+    assert_true(rc == 0, "integration-show-provider should succeed");
+    const auto show_text = show_out.str();
+    assert_true(show_text.find("api_key_redacted=TE***23") != std::string::npos, "show provider should redact api key");
+    assert_true(show_text.find("model_name=gpt-5") != std::string::npos, "show provider should reload non-secret settings");
+    assert_true(show_text.find("TEST_KEY_123") == std::string::npos, "show provider should never expose raw key");
+
+    std::ostringstream list_out;
+    std::ostringstream list_err;
+    rc = life_orchestrator::app::run_application({"integration-list-providers", "--data-root=" + root.string(), "--quiet-startup"}, list_out, list_err, "", std::filesystem::current_path());
+    assert_true(rc == 0, "integration-list-providers should succeed");
+    const auto list_text = list_out.str();
+    assert_true(list_text.find("provider_count=1") != std::string::npos, "provider list should show configured providers");
+    assert_true(list_text.find("provider_name=openai") != std::string::npos, "provider list should expose provider name");
+    assert_true(list_text.find("api_key_redacted=TE***23") != std::string::npos, "provider list should redact keys");
+}
+
+void test_operator_query_provider_and_status_visibility() {
+    const std::filesystem::path no_provider_root = "artifacts/operator_query_no_provider";
+    std::filesystem::remove_all(no_provider_root);
+
+    std::ostringstream missing_out;
+    std::ostringstream missing_err;
+    auto rc = life_orchestrator::app::run_application({"operator-query", "--data-root=" + no_provider_root.string(), "--quiet-startup", "--input", "what should I focus on today?"}, missing_out, missing_err, "", std::filesystem::current_path());
+    assert_true(rc == 3, "operator-query without provider should fail gracefully");
+    assert_true(missing_err.str().find("message=no_provider_configured") != std::string::npos, "operator-query should clearly report no configured provider");
+
+    const std::filesystem::path provider_root = "artifacts/operator_query_provider";
+    std::filesystem::remove_all(provider_root);
+    std::ostringstream set_out;
+    std::ostringstream set_err;
+    rc = life_orchestrator::app::run_application({"integration-set-provider", "--data-root=" + provider_root.string(), "--quiet-startup", "--provider-name", "openai", "--api-key", "TEST_KEY_123", "--model-name", "gpt-5"}, set_out, set_err, "", std::filesystem::current_path());
+    assert_true(rc == 0, "provider should configure for operator-query tests");
+
+    std::ostringstream deterministic_out;
+    std::ostringstream deterministic_err;
+    rc = life_orchestrator::app::run_application({"operator-query", "--data-root=" + provider_root.string(), "--quiet-startup", "--input", "status"}, deterministic_out, deterministic_err, "", std::filesystem::current_path());
+    assert_true(rc == 0, "operator-query should execute deterministic status command before fallback");
+    assert_true(deterministic_out.str().find("run_mode=status") != std::string::npos, "deterministic operator-query input should route to status");
+
+    std::ostringstream fallback_out;
+    std::ostringstream fallback_err;
+    rc = life_orchestrator::app::run_application({"operator-query", "--data-root=" + provider_root.string(), "--quiet-startup", "--input", "what should I focus on today?"}, fallback_out, fallback_err, "", std::filesystem::current_path());
+    assert_true(rc == 0, "operator-query should use configured stub provider for unmatched natural language");
+    assert_true(fallback_out.str().find("operator_query=llm_fallback") != std::string::npos, "operator-query should mark fallback execution");
+    assert_true(fallback_out.str().find("response_text=Stub response for input: what should I focus on today?") != std::string::npos, "operator-query should emit deterministic stub response");
+
+    std::ostringstream readiness_out;
+    std::ostringstream readiness_err;
+    rc = life_orchestrator::app::run_application({"integration-test-provider", "--data-root=" + provider_root.string(), "--quiet-startup", "--provider-name", "openai"}, readiness_out, readiness_err, "", std::filesystem::current_path());
+    assert_true(rc == 0, "integration-test-provider should succeed for deterministic test provider");
+    assert_true(readiness_out.str().find("ready=true") != std::string::npos, "provider readiness should emit stable key-value output");
+
+    std::ostringstream status_out;
+    std::ostringstream status_err;
+    rc = life_orchestrator::app::run_application({"status", "--data-root=" + provider_root.string(), "--quiet-startup"}, status_out, status_err, "", std::filesystem::current_path());
+    assert_true(rc == 0, "status should succeed with configured provider");
+    assert_true(status_out.str().find("configured_provider_count=1") != std::string::npos, "status should expose configured provider count");
+}
+
 }  // namespace
 
 int main() {
@@ -741,6 +837,9 @@ int main() {
         test_scheduling_proposal_cli_bridge();
         test_scheduling_proposal_default_emission_and_backward_compatibility();
         test_runtime_hygiene_ignore_file();
+        test_operator_alias_resolution_and_suggestions();
+        test_integration_provider_persistence_redaction_and_visibility();
+        test_operator_query_provider_and_status_visibility();
     } catch (const std::exception& e) {
         std::cerr << "Test failure: " << e.what() << '\n';
         return 1;

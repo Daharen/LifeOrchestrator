@@ -38,6 +38,16 @@ enum class ApplicationRunMode {
     ProceduralListActivities,
     ProceduralRunAudit,
     ProceduralListAuditRuns,
+    IntegrationSetProvider,
+    IntegrationShowProvider,
+    IntegrationListProviders,
+    IntegrationTestProvider,
+    OperatorQuery,
+    OperatorConsole,
+    Help,
+    Commands,
+    Aliases,
+    Suggest,
     BootstrapCheck
 };
 

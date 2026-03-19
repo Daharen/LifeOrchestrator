@@ -48,6 +48,45 @@ std::vector<std::string> split(const std::string& value) {
     return out;
 }
 
+std::string encode_map(const life_orchestrator::core::StringMap& values) {
+    std::vector<std::pair<std::string, std::string>> ordered(values.begin(), values.end());
+    std::sort(ordered.begin(), ordered.end());
+    std::string out;
+    for (std::size_t i = 0; i < ordered.size(); ++i) {
+        if (i > 0) {
+            out += ',';
+        }
+        out += ordered[i].first + "=" + ordered[i].second;
+    }
+    return out;
+}
+
+life_orchestrator::core::StringMap decode_map(const std::string& value) {
+    life_orchestrator::core::StringMap out;
+    if (value.empty()) {
+        return out;
+    }
+    std::string token;
+    for (char ch : value) {
+        if (ch == ',') {
+            const auto pos = token.find('=');
+            if (pos != std::string::npos) {
+                out[token.substr(0, pos)] = token.substr(pos + 1);
+            }
+            token.clear();
+        } else {
+            token.push_back(ch);
+        }
+    }
+    if (!token.empty()) {
+        const auto pos = token.find('=');
+        if (pos != std::string::npos) {
+            out[token.substr(0, pos)] = token.substr(pos + 1);
+        }
+    }
+    return out;
+}
+
 }  // namespace
 
 IntegrationConfigurationRepository::IntegrationConfigurationRepository(std::filesystem::path data_root)
@@ -70,6 +109,7 @@ core::MemoryResult IntegrationConfigurationRepository::upsert(
         << "capability_visibility=" << join(record.capability_visibility) << ';'
         << "credential_storage_mode=" << core::to_string(record.credential_storage_mode) << ';'
         << "credential_reference=" << record.credential_reference << ';'
+        << "non_secret_settings=" << encode_map(record.non_secret_settings) << ';'
         << "created_at=" << record.created_at << ';'
         << "updated_at=" << record.updated_at << ';'
         << "version=" << record.version << '\n';
@@ -133,7 +173,7 @@ core::MemoryResult IntegrationConfigurationRepository::load() {
                                                     .connection_diagnostics = {},
                                                     .credential_storage_mode = storage_mode,
                                                     .credential_reference = fields["credential_reference"],
-                                                    .non_secret_settings = {},
+                                                    .non_secret_settings = decode_map(fields["non_secret_settings"]),
                                                     .created_at = fields["created_at"],
                                                     .updated_at = fields["updated_at"],
                                                     .version = static_cast<core::MemoryVersion>(
