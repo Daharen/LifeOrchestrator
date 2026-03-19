@@ -27,29 +27,51 @@ function Get-CMakeCacheValue {
     return $line.Matches[0].Groups[2].Value
 }
 
+function Test-IsWindowsHost {
+    if ($null -ne $IsWindows -and $IsWindows) {
+        return $true
+    }
+
+    if ($env:OS -eq 'Windows_NT') {
+        return $true
+    }
+
+    return $false
+}
+
+$isWindowsHost = Test-IsWindowsHost
 $Target = 'life_orchestrator_app'
 $RunArgs = @($args)
 
-if ($args.Count -gt 0 -and ($args[0] -eq 'gui' -or $args[0] -eq 'admin-gui')) {
-    $isWindowsHost = $false
-    if ($null -ne $IsWindows -and $IsWindows) {
-        $isWindowsHost = $true
-    }
-    elseif ($env:OS -eq 'Windows_NT') {
-        $isWindowsHost = $true
-    }
-
-    if (-not $isWindowsHost) {
-        Write-Error 'life_orchestrator_admin_gui is only available on Windows.'
-        exit 1
-    }
-
+if ($args.Count -eq 0 -and $isWindowsHost) {
     $Target = 'life_orchestrator_admin_gui'
-    if ($args.Count -gt 1) {
-        $RunArgs = $args[1..($args.Count - 1)]
+    $RunArgs = @()
+}
+elseif ($args.Count -gt 0) {
+    $firstArg = $args[0]
+
+    if ($firstArg -eq 'gui' -or $firstArg -eq 'admin-gui') {
+        if (-not $isWindowsHost) {
+            Write-Error 'life_orchestrator_admin_gui is only available on Windows.'
+            exit 1
+        }
+
+        $Target = 'life_orchestrator_admin_gui'
+        if ($args.Count -gt 1) {
+            $RunArgs = $args[1..($args.Count - 1)]
+        }
+        else {
+            $RunArgs = @()
+        }
     }
-    else {
-        $RunArgs = @()
+    elseif ($firstArg -eq 'cli' -or $firstArg -eq 'headless' -or $firstArg -eq 'app') {
+        $Target = 'life_orchestrator_app'
+        if ($args.Count -gt 1) {
+            $RunArgs = $args[1..($args.Count - 1)]
+        }
+        else {
+            $RunArgs = @()
+        }
     }
 }
 

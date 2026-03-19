@@ -1,11 +1,20 @@
 #ifdef _WIN32
 
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+
 #include "app/application_bootstrap.hpp"
 
 #include <windows.h>
 #include <commctrl.h>
 
 #include <algorithm>
+#include <cstdint>
 #include <cstdlib>
 #include <filesystem>
 #include <string>
@@ -30,6 +39,10 @@ constexpr int kControlRefreshStatusButton = 110;
 constexpr int kControlOutputEdit = 111;
 constexpr int kControlStatusText = 112;
 
+HMENU control_menu_id(const int value) {
+    return reinterpret_cast<HMENU>(static_cast<intptr_t>(value));
+}
+
 struct QuickCommand {
     const wchar_t* label;
     std::vector<std::string> args;
@@ -47,7 +60,7 @@ const std::vector<QuickCommand>& quick_commands() {
         {L"Schedule Proposals", {"scheduling-list-proposals"}},
         {L"Provider Summary", {"integration-list-providers"}},
         {L"Commands", {"commands"}},
-        {L"Aliases", {"aliases"}},
+        {L"Aliases", {"aliases"}}
     };
     return commands;
 }
@@ -117,7 +130,9 @@ void refresh_suggestions(HWND hwnd) {
         const auto widened = widen(suggestion);
         SendMessageW(state->suggestion_list, LB_ADDSTRING, 0, reinterpret_cast<LPARAM>(widened.c_str()));
     }
-    if (!suggestions.empty()) SendMessageW(state->suggestion_list, LB_SETCURSEL, 0, 0);
+    if (!suggestions.empty()) {
+        SendMessageW(state->suggestion_list, LB_SETCURSEL, 0, 0);
+    }
 }
 
 void execute_args(HWND hwnd, const std::vector<std::string>& args) {
@@ -138,6 +153,7 @@ void execute_args(HWND hwnd, const std::vector<std::string>& args) {
         rendered += "\n[stderr]\n";
         rendered += result.standard_error;
     }
+
     set_output(hwnd, rendered);
     set_status(hwnd, result.exit_code == 0 ? "Last command succeeded." : "Last command failed.");
 }
@@ -212,7 +228,7 @@ void layout_controls(HWND hwnd) {
 
     const int output_top = command_top + (row_height * 2) + 12;
     MoveWindow(GetDlgItem(hwnd, kControlStatusText), margin, output_top, width - (margin * 2), row_height, TRUE);
-    MoveWindow(GetDlgItem(hwnd, kControlOutputEdit), margin, output_top + row_height + 4, width - (margin * 2), std::max(120, output_height), TRUE);
+    MoveWindow(GetDlgItem(hwnd, kControlOutputEdit), margin, output_top + row_height + 4, width - (margin * 2), (std::max)(120, output_height), TRUE);
 }
 
 LRESULT CALLBACK window_proc(HWND hwnd, UINT message, WPARAM w_param, LPARAM l_param) {
@@ -226,21 +242,21 @@ LRESULT CALLBACK window_proc(HWND hwnd, UINT message, WPARAM w_param, LPARAM l_p
             auto* state = state_from(hwnd);
             if (state == nullptr) return -1;
 
-            CreateWindowExW(0, L"STATIC", L"Quick visibility views", WS_CHILD | WS_VISIBLE, 0, 0, 0, 0, hwnd, reinterpret_cast<HMENU>(kControlQuickLabel), nullptr, nullptr);
-            state->quick_combo = CreateWindowExW(0, L"COMBOBOX", L"", WS_CHILD | WS_VISIBLE | CBS_DROPDOWNLIST | WS_VSCROLL, 0, 0, 0, 0, hwnd, reinterpret_cast<HMENU>(kControlQuickCombo), nullptr, nullptr);
-            CreateWindowExW(0, L"BUTTON", L"Run Selected View", WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON, 0, 0, 0, 0, hwnd, reinterpret_cast<HMENU>(kControlRunQuickButton), nullptr, nullptr);
+            CreateWindowExW(0, L"STATIC", L"Quick visibility views", WS_CHILD | WS_VISIBLE, 0, 0, 0, 0, hwnd, control_menu_id(kControlQuickLabel), nullptr, nullptr);
+            state->quick_combo = CreateWindowExW(0, L"COMBOBOX", L"", WS_CHILD | WS_VISIBLE | CBS_DROPDOWNLIST | WS_VSCROLL, 0, 0, 0, 0, hwnd, control_menu_id(kControlQuickCombo), nullptr, nullptr);
+            CreateWindowExW(0, L"BUTTON", L"Run Selected View", WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON, 0, 0, 0, 0, hwnd, control_menu_id(kControlRunQuickButton), nullptr, nullptr);
 
-            CreateWindowExW(0, L"STATIC", L"Command palette", WS_CHILD | WS_VISIBLE, 0, 0, 0, 0, hwnd, reinterpret_cast<HMENU>(kControlPaletteLabel), nullptr, nullptr);
-            state->palette_edit = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", L"", WS_CHILD | WS_VISIBLE | ES_AUTOHSCROLL, 0, 0, 0, 0, hwnd, reinterpret_cast<HMENU>(kControlPaletteEdit), nullptr, nullptr);
-            state->suggestion_list = CreateWindowExW(WS_EX_CLIENTEDGE, L"LISTBOX", L"", WS_CHILD | WS_VISIBLE | LBS_NOTIFY | WS_VSCROLL, 0, 0, 0, 0, hwnd, reinterpret_cast<HMENU>(kControlSuggestionList), nullptr, nullptr);
-            CreateWindowExW(0, L"BUTTON", L"Copy Selected Suggestion", WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON, 0, 0, 0, 0, hwnd, reinterpret_cast<HMENU>(kControlUseSuggestionButton), nullptr, nullptr);
+            CreateWindowExW(0, L"STATIC", L"Command palette", WS_CHILD | WS_VISIBLE, 0, 0, 0, 0, hwnd, control_menu_id(kControlPaletteLabel), nullptr, nullptr);
+            state->palette_edit = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", L"", WS_CHILD | WS_VISIBLE | ES_AUTOHSCROLL, 0, 0, 0, 0, hwnd, control_menu_id(kControlPaletteEdit), nullptr, nullptr);
+            state->suggestion_list = CreateWindowExW(WS_EX_CLIENTEDGE, L"LISTBOX", L"", WS_CHILD | WS_VISIBLE | LBS_NOTIFY | WS_VSCROLL, 0, 0, 0, 0, hwnd, control_menu_id(kControlSuggestionList), nullptr, nullptr);
+            CreateWindowExW(0, L"BUTTON", L"Copy Selected Suggestion", WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON, 0, 0, 0, 0, hwnd, control_menu_id(kControlUseSuggestionButton), nullptr, nullptr);
 
-            CreateWindowExW(0, L"STATIC", L"Operator command or natural-language input", WS_CHILD | WS_VISIBLE, 0, 0, 0, 0, hwnd, reinterpret_cast<HMENU>(kControlCommandLabel), nullptr, nullptr);
-            state->command_edit = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", L"status", WS_CHILD | WS_VISIBLE | ES_AUTOHSCROLL, 0, 0, 0, 0, hwnd, reinterpret_cast<HMENU>(kControlCommandEdit), nullptr, nullptr);
-            CreateWindowExW(0, L"BUTTON", L"Run Operator Query", WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON, 0, 0, 0, 0, hwnd, reinterpret_cast<HMENU>(kControlRunCommandButton), nullptr, nullptr);
-            CreateWindowExW(0, L"BUTTON", L"Refresh Status", WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON, 0, 0, 0, 0, hwnd, reinterpret_cast<HMENU>(kControlRefreshStatusButton), nullptr, nullptr);
+            CreateWindowExW(0, L"STATIC", L"Operator command or natural-language input", WS_CHILD | WS_VISIBLE, 0, 0, 0, 0, hwnd, control_menu_id(kControlCommandLabel), nullptr, nullptr);
+            state->command_edit = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", L"status", WS_CHILD | WS_VISIBLE | ES_AUTOHSCROLL, 0, 0, 0, 0, hwnd, control_menu_id(kControlCommandEdit), nullptr, nullptr);
+            CreateWindowExW(0, L"BUTTON", L"Run Operator Query", WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON, 0, 0, 0, 0, hwnd, control_menu_id(kControlRunCommandButton), nullptr, nullptr);
+            CreateWindowExW(0, L"BUTTON", L"Refresh Status", WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON, 0, 0, 0, 0, hwnd, control_menu_id(kControlRefreshStatusButton), nullptr, nullptr);
 
-            state->status_text = CreateWindowExW(0, L"STATIC", L"Ready.", WS_CHILD | WS_VISIBLE, 0, 0, 0, 0, hwnd, reinterpret_cast<HMENU>(kControlStatusText), nullptr, nullptr);
+            state->status_text = CreateWindowExW(0, L"STATIC", L"Ready.", WS_CHILD | WS_VISIBLE, 0, 0, 0, 0, hwnd, control_menu_id(kControlStatusText), nullptr, nullptr);
             state->output_edit = CreateWindowExW(WS_EX_CLIENTEDGE,
                                                  L"EDIT",
                                                  L"",
@@ -250,7 +266,7 @@ LRESULT CALLBACK window_proc(HWND hwnd, UINT message, WPARAM w_param, LPARAM l_p
                                                  0,
                                                  0,
                                                  hwnd,
-                                                 reinterpret_cast<HMENU>(kControlOutputEdit),
+                                                 control_menu_id(kControlOutputEdit),
                                                  nullptr,
                                                  nullptr);
 
@@ -334,7 +350,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show_command) {
     window_class.lpfnWndProc = window_proc;
     window_class.hInstance = instance;
     window_class.lpszClassName = L"LifeOrchestratorAdminGuiWindow";
-    window_class.hCursor = LoadCursorW(nullptr, IDC_ARROW);
+    window_class.hCursor = LoadCursorW(nullptr, MAKEINTRESOURCEW(OCR_NORMAL));
     window_class.hbrBackground = reinterpret_cast<HBRUSH>(COLOR_WINDOW + 1);
     RegisterClassExW(&window_class);
 
