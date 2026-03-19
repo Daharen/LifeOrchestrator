@@ -30,6 +30,8 @@ enum class ApplicationRunMode {
     BehavioralStatus,
     SchedulingGenerateCandidates,
     SchedulingListCandidates,
+    SchedulingGenerateProposals,
+    SchedulingListProposals,
     ProceduralHealthCheck,
     ProceduralListProposals,
     ProceduralUpsertActivity,

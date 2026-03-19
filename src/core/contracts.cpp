@@ -142,6 +142,17 @@ LO_SWITCH_TO_STRING(SchedulingCandidateStatus, value,
     case SchedulingCandidateStatus::ScheduledProposalGenerated: return "scheduled_proposal_generated";
     case SchedulingCandidateStatus::Rejected: return "rejected";)
 
+LO_SWITCH_TO_STRING(ScheduleProposalArtifactStatus, value,
+    case ScheduleProposalArtifactStatus::Proposed: return "proposed";
+    case ScheduleProposalArtifactStatus::ConflictDetected: return "conflict_detected";
+    case ScheduleProposalArtifactStatus::Superseded: return "superseded";
+    case ScheduleProposalArtifactStatus::Rejected: return "rejected";)
+
+LO_SWITCH_TO_STRING(ScheduleProposalConflictStatus, value,
+    case ScheduleProposalConflictStatus::None: return "none";
+    case ScheduleProposalConflictStatus::PotentialConflict: return "potential_conflict";
+    case ScheduleProposalConflictStatus::Blocked: return "blocked";)
+
 TimestampString current_timestamp_utc() {
     return format_timestamp<std::chrono::system_clock>(std::chrono::system_clock::now());
 }

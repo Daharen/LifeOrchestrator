@@ -25,6 +25,7 @@ MemoryResult MemoryService::log_module_execution_episode(const SourceModuleId& s
 MemoryResult MemoryService::upsert_scheduled_commitment(const ScheduledCommitment& record) { return store_.upsert_scheduled_commitment(record); }
 MemoryResult MemoryService::append_task_candidate(const SchedulingTaskCandidate& record) { return store_.append_task_candidate(record); }
 MemoryResult MemoryService::upsert_scheduling_candidate_record(const SchedulingCandidateRecord& record) { return store_.upsert_scheduling_candidate_record(record); }
+MemoryResult MemoryService::upsert_schedule_proposal_artifact(const ScheduleProposalArtifact& record) { return store_.upsert_schedule_proposal_artifact(record); }
 MemoryResult MemoryService::upsert_availability_window(const AvailabilityWindow& record) { return store_.upsert_availability_window(record); }
 MemoryResult MemoryService::upsert_constraint_set(const SchedulingConstraintSet& record) { return store_.upsert_constraint_set(record); }
 MemoryResult MemoryService::append_proposal(const SchedulingProposal& record) { return store_.append_proposal(record); }
@@ -45,6 +46,8 @@ MemoryResultWith<std::vector<SchedulingTaskCandidate>> MemoryService::list_task_
 MemoryResultWith<std::vector<AvailabilityWindow>> MemoryService::list_availability_windows_in_window(const TimestampString& start_time, const TimestampString& end_time) const { return store_.list_availability_windows_in_window(start_time, end_time); }
 MemoryResultWith<std::vector<SchedulingCandidateRecord>> MemoryService::list_scheduling_candidate_records() const { return store_.list_scheduling_candidate_records(); }
 MemoryResultWith<SchedulingCandidateRecord> MemoryService::get_scheduling_candidate_record_by_id(const SchedulingCandidateId& candidate_id) const { return store_.get_scheduling_candidate_record_by_id(candidate_id); }
+MemoryResultWith<std::vector<ScheduleProposalArtifact>> MemoryService::list_schedule_proposal_artifacts() const { return store_.list_schedule_proposal_artifacts(); }
+MemoryResultWith<ScheduleProposalArtifact> MemoryService::get_schedule_proposal_artifact_by_id(const ScheduleProposalArtifactId& proposal_id) const { return store_.get_schedule_proposal_artifact_by_id(proposal_id); }
 MemoryResultWith<std::vector<SchedulingProposal>> MemoryService::list_proposals_for_task_candidate(const ScheduleItemId& task_candidate_id) const { return store_.list_proposals_for_task_candidate(task_candidate_id); }
 MemoryResultWith<std::vector<SchedulingConflict>> MemoryService::list_conflicts(const TimestampString& start_time, const TimestampString& end_time, const std::optional<ScheduleItemId>& schedule_item_id) const { return store_.list_conflicts(start_time, end_time, schedule_item_id); }
 MemoryResultWith<SchedulingProposal> MemoryService::get_proposal_by_id(const ProposalId& proposal_id) const { return store_.get_proposal_by_id(proposal_id); }
