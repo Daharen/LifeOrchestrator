@@ -263,6 +263,7 @@ public:
     virtual MemoryResult append_behavioral_decision(const BehavioralTriageDecision& record) = 0;
     virtual MemoryResult upsert_behavioral_backlog_item(const BehavioralBacklogItem& record) = 0;
     virtual MemoryResult append_behavioral_intervention(const BehavioralInterventionRecord& record) = 0;
+    virtual MemoryResult append_behavioral_reevaluation_artifact(const BehavioralReevaluationArtifact& record) = 0;
     virtual MemoryResult upsert_activity_inventory_item(const ActivityInventoryItem& record) = 0;
     virtual MemoryResult upsert_procedural_audit_run_record(const ProceduralAuditRunRecord& record) = 0;
     virtual MemoryResult upsert_optimization_proposal_record(const OptimizationProposalRecord& record) = 0;
@@ -296,6 +297,7 @@ public:
     virtual MemoryResultWith<BehavioralProposal> get_behavioral_proposal_by_id(const BehavioralProposalId& proposal_id) const = 0;
     virtual MemoryResultWith<BehavioralTriageDecision> get_behavioral_decision_by_id(const BehavioralDecisionId& decision_id) const = 0;
     virtual MemoryResultWith<BehavioralBacklogItem> get_behavioral_backlog_item_by_proposal_id(const BehavioralProposalId& proposal_id) const = 0;
+    virtual MemoryResultWith<std::vector<BehavioralReevaluationArtifact>> list_behavioral_reevaluation_artifacts() const = 0;
     virtual MemoryResultWith<BehavioralMemorySummary> get_behavioral_memory_summary() const = 0;
     virtual MemoryResultWith<std::vector<ActivityInventoryItem>> list_activity_inventory_items() const = 0;
     virtual MemoryResultWith<ActivityInventoryItem> get_activity_inventory_item_by_id(const ActivityInventoryItemId& activity_inventory_item_id) const = 0;
@@ -335,6 +337,7 @@ public:
     MemoryResult append_behavioral_decision(const BehavioralTriageDecision& record) override;
     MemoryResult upsert_behavioral_backlog_item(const BehavioralBacklogItem& record) override;
     MemoryResult append_behavioral_intervention(const BehavioralInterventionRecord& record) override;
+    MemoryResult append_behavioral_reevaluation_artifact(const BehavioralReevaluationArtifact& record) override;
     MemoryResult upsert_activity_inventory_item(const ActivityInventoryItem& record) override;
     MemoryResult upsert_procedural_audit_run_record(const ProceduralAuditRunRecord& record) override;
     MemoryResult upsert_optimization_proposal_record(const OptimizationProposalRecord& record) override;
@@ -367,6 +370,7 @@ public:
     MemoryResultWith<BehavioralProposal> get_behavioral_proposal_by_id(const BehavioralProposalId& proposal_id) const override;
     MemoryResultWith<BehavioralTriageDecision> get_behavioral_decision_by_id(const BehavioralDecisionId& decision_id) const override;
     MemoryResultWith<BehavioralBacklogItem> get_behavioral_backlog_item_by_proposal_id(const BehavioralProposalId& proposal_id) const override;
+    MemoryResultWith<std::vector<BehavioralReevaluationArtifact>> list_behavioral_reevaluation_artifacts() const override;
     MemoryResultWith<BehavioralMemorySummary> get_behavioral_memory_summary() const override;
     MemoryResultWith<std::vector<ActivityInventoryItem>> list_activity_inventory_items() const override;
     MemoryResultWith<ActivityInventoryItem> get_activity_inventory_item_by_id(const ActivityInventoryItemId& activity_inventory_item_id) const override;
@@ -404,6 +408,7 @@ private:
     std::unordered_map<BacklogItemId, BehavioralBacklogItem> behavioral_backlog_items_by_id_;
     std::unordered_map<BehavioralProposalId, BacklogItemId> behavioral_backlog_item_id_by_proposal_id_;
     std::unordered_map<InterventionId, BehavioralInterventionRecord> behavioral_interventions_by_id_;
+    std::unordered_map<BehavioralReevaluationId, BehavioralReevaluationArtifact> behavioral_reevaluations_by_id_;
     std::unordered_map<ActivityInventoryItemId, ActivityInventoryItem> activity_inventory_by_id_;
     std::unordered_map<ProceduralAuditRunId, ProceduralAuditRunRecord> procedural_audit_runs_by_id_;
     std::unordered_map<OptimizationProposalId, OptimizationProposalRecord> optimization_proposals_by_id_;

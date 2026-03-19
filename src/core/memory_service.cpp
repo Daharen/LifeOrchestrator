@@ -34,6 +34,7 @@ MemoryResult MemoryService::append_behavioral_state_snapshot(const BehavioralSta
 MemoryResult MemoryService::append_behavioral_decision(const BehavioralTriageDecision& record) { return store_.append_behavioral_decision(record); }
 MemoryResult MemoryService::upsert_behavioral_backlog_item(const BehavioralBacklogItem& record) { return store_.upsert_behavioral_backlog_item(record); }
 MemoryResult MemoryService::append_behavioral_intervention(const BehavioralInterventionRecord& record) { return store_.append_behavioral_intervention(record); }
+MemoryResult MemoryService::append_behavioral_reevaluation_artifact(const BehavioralReevaluationArtifact& record) { return store_.append_behavioral_reevaluation_artifact(record); }
 MemoryResult MemoryService::upsert_activity_inventory_item(const ActivityInventoryItem& record) { return store_.upsert_activity_inventory_item(record); }
 MemoryResult MemoryService::upsert_procedural_audit_run_record(const ProceduralAuditRunRecord& record) { return store_.upsert_procedural_audit_run_record(record); }
 MemoryResult MemoryService::upsert_optimization_proposal_record(const OptimizationProposalRecord& record) { return store_.upsert_optimization_proposal_record(record); }
@@ -54,6 +55,7 @@ MemoryResultWith<std::vector<BehavioralInterventionRecord>> MemoryService::list_
 MemoryResultWith<BehavioralProposal> MemoryService::get_behavioral_proposal_by_id(const BehavioralProposalId& proposal_id) const { return store_.get_behavioral_proposal_by_id(proposal_id); }
 MemoryResultWith<BehavioralTriageDecision> MemoryService::get_behavioral_decision_by_id(const BehavioralDecisionId& decision_id) const { return store_.get_behavioral_decision_by_id(decision_id); }
 MemoryResultWith<BehavioralBacklogItem> MemoryService::get_behavioral_backlog_item_by_proposal_id(const BehavioralProposalId& proposal_id) const { return store_.get_behavioral_backlog_item_by_proposal_id(proposal_id); }
+MemoryResultWith<std::vector<BehavioralReevaluationArtifact>> MemoryService::list_behavioral_reevaluation_artifacts() const { return store_.list_behavioral_reevaluation_artifacts(); }
 MemoryResultWith<BehavioralMemorySummary> MemoryService::get_behavioral_memory_summary() const { return store_.get_behavioral_memory_summary(); }
 MemoryResultWith<std::vector<ActivityInventoryItem>> MemoryService::list_activity_inventory_items() const { return store_.list_activity_inventory_items(); }
 MemoryResultWith<ActivityInventoryItem> MemoryService::get_activity_inventory_item_by_id(const ActivityInventoryItemId& activity_inventory_item_id) const { return store_.get_activity_inventory_item_by_id(activity_inventory_item_id); }

@@ -29,6 +29,7 @@ public:
     MemoryResult append_behavioral_decision(const BehavioralTriageDecision& record);
     MemoryResult upsert_behavioral_backlog_item(const BehavioralBacklogItem& record);
     MemoryResult append_behavioral_intervention(const BehavioralInterventionRecord& record);
+    MemoryResult append_behavioral_reevaluation_artifact(const BehavioralReevaluationArtifact& record);
     MemoryResult upsert_activity_inventory_item(const ActivityInventoryItem& record);
     MemoryResult upsert_procedural_audit_run_record(const ProceduralAuditRunRecord& record);
     MemoryResult upsert_optimization_proposal_record(const OptimizationProposalRecord& record);
@@ -58,6 +59,7 @@ public:
     MemoryResultWith<BehavioralProposal> get_behavioral_proposal_by_id(const BehavioralProposalId& proposal_id) const;
     MemoryResultWith<BehavioralTriageDecision> get_behavioral_decision_by_id(const BehavioralDecisionId& decision_id) const;
     MemoryResultWith<BehavioralBacklogItem> get_behavioral_backlog_item_by_proposal_id(const BehavioralProposalId& proposal_id) const;
+    MemoryResultWith<std::vector<BehavioralReevaluationArtifact>> list_behavioral_reevaluation_artifacts() const;
     MemoryResultWith<BehavioralMemorySummary> get_behavioral_memory_summary() const;
     MemoryResultWith<std::vector<ActivityInventoryItem>> list_activity_inventory_items() const;
     MemoryResultWith<ActivityInventoryItem> get_activity_inventory_item_by_id(const ActivityInventoryItemId& activity_inventory_item_id) const;

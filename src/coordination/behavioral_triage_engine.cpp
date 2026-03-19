@@ -45,6 +45,10 @@ std::vector<EngineDecisionRecord> BehavioralTriageEngine::triage(
         std::string priority_reason = "priority=" + core::to_string(proposal.priority) + ",roi=" + std::to_string(roi);
         std::optional<core::BehavioralBacklogItem> backlog;
         std::optional<core::BehavioralInterventionRecord> intervention;
+        const auto source_proposal_id = proposal.attributes.contains("source_proposal_id") ? proposal.attributes.at("source_proposal_id") : proposal.behavioral_proposal_id;
+        const auto source_audit_run_id = proposal.attributes.contains("source_audit_run_id") ? proposal.attributes.at("source_audit_run_id") : "none";
+        const auto source_activity_id = proposal.attributes.contains("source_activity_id") ? proposal.attributes.at("source_activity_id") : "none";
+        const auto rationale = proposal.description.empty() ? gate_reason + ":" + proposal.title : proposal.description;
 
         if (proposal.latest_relevant_time && *proposal.latest_relevant_time < now) {
             type = core::BehavioralDecisionType::Rejected;
@@ -61,23 +65,35 @@ std::vector<EngineDecisionRecord> BehavioralTriageEngine::triage(
                                                   std::nullopt,
                                                   proposal.earliest_presentation_time,
                                                   source_module_id,
-                                                  1};
+                                                  1,
+                                                  source_proposal_id,
+                                                  source_audit_run_id,
+                                                  source_activity_id,
+                                                  core::to_string(proposal.priority),
+                                                  std::to_string(static_cast<int>(proposal.estimated_behavioral_effort)),
+                                                  rationale};
         } else {
             ++approved;
-            intervention = core::BehavioralInterventionRecord{"intervention." + proposal.behavioral_proposal_id + "." + now,
+            intervention = core::BehavioralInterventionRecord{"intervention." + proposal.behavioral_proposal_id,
                                                               proposal.behavioral_proposal_id,
-                                                              "decision." + proposal.behavioral_proposal_id + "." + now,
+                                                              "decision." + proposal.behavioral_proposal_id,
                                                               proposal.title,
                                                               proposal.presentation_mode,
                                                               proposal.earliest_presentation_time,
                                                               now,
                                                               "Approved",
                                                               source_module_id,
-                                                              1};
+                                                              1,
+                                                              source_proposal_id,
+                                                              source_audit_run_id,
+                                                              source_activity_id,
+                                                              core::to_string(proposal.priority),
+                                                              std::to_string(static_cast<int>(proposal.estimated_behavioral_effort)),
+                                                              rationale};
         }
 
         out.push_back({proposal,
-                       core::BehavioralTriageDecision{"decision." + proposal.behavioral_proposal_id + "." + now,
+                       core::BehavioralTriageDecision{"decision." + proposal.behavioral_proposal_id,
                                                       proposal.behavioral_proposal_id,
                                                       type,
                                                       roi,
