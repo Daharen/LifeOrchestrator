@@ -30,6 +30,13 @@ enum class OptimizationOpportunityType {
     StructuralOptimization
 };
 
+enum class AutomationFeasibility {
+    Low,
+    Medium,
+    High,
+    NotApplicable
+};
+
 struct EnergyRecoveryEstimate {
     int recovered_minutes_per_week;
     int recovered_effort_points;
@@ -81,6 +88,16 @@ struct OptimizationProposalRecord {
     std::string linked_behavioral_proposal_id;
     std::string triage_status;
     std::string triage_decision_id;
+    AutomationFeasibility automation_feasibility;
+    std::string risk_tier;
+    double reliability_estimate;
+    int time_recovery_minutes;
+    int cognitive_recovery_score;
+    int stress_recovery_score;
+    int financial_cost_estimate;
+    int marginal_benefit_score;
+    bool diminishing_return_flag;
+    ProceduralAuditRunId source_audit_run_id;
     ProceduralAttributes attributes;
 };
 
@@ -92,7 +109,9 @@ struct ProceduralMemorySummary {
 
 std::string to_string(EffortValueClassification value);
 std::string to_string(OptimizationOpportunityType value);
+std::string to_string(AutomationFeasibility value);
 EffortValueClassification effort_value_classification_from_string(const std::string& value);
 OptimizationOpportunityType optimization_opportunity_type_from_string(const std::string& value);
+AutomationFeasibility automation_feasibility_from_string(const std::string& value);
 
 }  // namespace life_orchestrator::core
