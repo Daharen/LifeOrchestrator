@@ -83,6 +83,7 @@ using ProposalId = std::string;
 using ConstraintSetId = std::string;
 using WindowId = std::string;
 using ScheduleDecisionId = std::string;
+using SchedulingCandidateId = std::string;
 
 using StringMap = std::unordered_map<std::string, std::string>;
 
@@ -172,6 +173,13 @@ enum class SchedulingOperationType {
     ProposeTimeBlocks,
     CommitProposal,
     ListScheduleWindow
+};
+
+enum class SchedulingCandidateStatus {
+    Candidate,
+    Deferred,
+    ScheduledProposalGenerated,
+    Rejected
 };
 
 struct ScheduledCommitment {
@@ -276,6 +284,25 @@ struct SchedulingDecisionRecord {
     std::uint64_t version;
 };
 
+struct SchedulingCandidateRecord {
+    SchedulingCandidateId candidate_id;
+    std::string source_intervention_id;
+    std::string source_proposal_id;
+    std::string source_audit_run_id;
+    std::string source_activity_id;
+    int estimated_duration_minutes;
+    std::string urgency;
+    std::string scheduling_window_hint;
+    std::string recommended_time_of_day;
+    std::string recommended_day_span;
+    std::string rationale;
+    SchedulingCandidateStatus status;
+    std::string source_module_id;
+    TimestampString created_at;
+    TimestampString updated_at;
+    std::uint64_t version;
+};
+
 std::string to_string(ModuleClass value);
 std::string to_string(RiskTier value);
 std::string to_string(ExecutionStatus value);
@@ -286,6 +313,7 @@ std::string to_string(ConflictType value);
 std::string to_string(SchedulingPriority value);
 std::string to_string(ProposalStatus value);
 std::string to_string(SchedulingOperationType value);
+std::string to_string(SchedulingCandidateStatus value);
 TimestampString current_timestamp_utc();
 
 }  // namespace life_orchestrator::core
