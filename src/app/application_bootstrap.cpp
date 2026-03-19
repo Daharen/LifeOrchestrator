@@ -2,7 +2,10 @@
 #include "coordination/scheduling_engine.hpp"
 
 #include <algorithm>
+#include <cctype>
 #include <cstdlib>
+#include <fstream>
+#include <iostream>
 #include <sstream>
 #include <stdexcept>
 #include <unordered_map>
@@ -48,6 +51,16 @@ ApplicationRunMode parse_run_mode(const std::string& value) {
     if (value == "procedural-list-activities") return ApplicationRunMode::ProceduralListActivities;
     if (value == "procedural-run-audit") return ApplicationRunMode::ProceduralRunAudit;
     if (value == "procedural-list-audit-runs") return ApplicationRunMode::ProceduralListAuditRuns;
+    if (value == "integration-set-provider") return ApplicationRunMode::IntegrationSetProvider;
+    if (value == "integration-show-provider") return ApplicationRunMode::IntegrationShowProvider;
+    if (value == "integration-list-providers") return ApplicationRunMode::IntegrationListProviders;
+    if (value == "integration-test-provider") return ApplicationRunMode::IntegrationTestProvider;
+    if (value == "operator-query") return ApplicationRunMode::OperatorQuery;
+    if (value == "operator-console") return ApplicationRunMode::OperatorConsole;
+    if (value == "help") return ApplicationRunMode::Help;
+    if (value == "commands") return ApplicationRunMode::Commands;
+    if (value == "aliases") return ApplicationRunMode::Aliases;
+    if (value == "suggest") return ApplicationRunMode::Suggest;
     return ApplicationRunMode::BootstrapCheck;
 }
 
@@ -73,6 +86,16 @@ std::string run_mode_name(ApplicationRunMode mode) {
         case ApplicationRunMode::ProceduralListActivities: return "procedural-list-activities";
         case ApplicationRunMode::ProceduralRunAudit: return "procedural-run-audit";
         case ApplicationRunMode::ProceduralListAuditRuns: return "procedural-list-audit-runs";
+        case ApplicationRunMode::IntegrationSetProvider: return "integration-set-provider";
+        case ApplicationRunMode::IntegrationShowProvider: return "integration-show-provider";
+        case ApplicationRunMode::IntegrationListProviders: return "integration-list-providers";
+        case ApplicationRunMode::IntegrationTestProvider: return "integration-test-provider";
+        case ApplicationRunMode::OperatorQuery: return "operator-query";
+        case ApplicationRunMode::OperatorConsole: return "operator-console";
+        case ApplicationRunMode::Help: return "help";
+        case ApplicationRunMode::Commands: return "commands";
+        case ApplicationRunMode::Aliases: return "aliases";
+        case ApplicationRunMode::Suggest: return "suggest";
         case ApplicationRunMode::BootstrapCheck: return "bootstrap-check";
     }
     return "bootstrap-check";
@@ -87,12 +110,109 @@ std::string value_after_equals(const std::string& arg) {
     return pos == std::string::npos ? std::string{} : arg.substr(pos + 1);
 }
 
-bool is_command_name(const std::string& value) {
+const std::vector<std::string>& command_names() {
     static const std::vector<std::string> commands = {
-        "status", "list-modules", "schedule-health-check", "behavioral-health-check", "behavioral-list-backlog", "behavioral-record-state", "behavioral-list-interventions", "behavioral-reevaluate-backlog", "behavioral-list-reevaluations", "behavioral-status", "scheduling-generate-candidates", "scheduling-list-candidates", "scheduling-generate-proposals", "scheduling-list-proposals",
-        "procedural-health-check", "procedural-list-proposals", "procedural-upsert-activity", "procedural-list-activities",
-        "procedural-run-audit", "procedural-list-audit-runs", "bootstrap-check"};
+        "aliases", "behavioral-health-check", "behavioral-list-backlog", "behavioral-list-interventions", "behavioral-list-reevaluations",
+        "behavioral-record-state", "behavioral-reevaluate-backlog", "behavioral-status", "bootstrap-check", "commands",
+        "help", "integration-list-providers", "integration-set-provider", "integration-show-provider", "integration-test-provider",
+        "list-modules", "operator-console", "operator-query", "procedural-health-check", "procedural-list-activities",
+        "procedural-list-audit-runs", "procedural-list-proposals", "procedural-run-audit", "procedural-upsert-activity",
+        "schedule-health-check", "scheduling-generate-candidates", "scheduling-generate-proposals", "scheduling-list-candidates",
+        "scheduling-list-proposals", "status", "suggest"};
+    return commands;
+}
+
+const std::vector<std::pair<std::string, std::string>>& alias_table() {
+    static const std::vector<std::pair<std::string, std::string>> aliases = {
+        {"activities", "procedural-list-activities"},
+        {"backlog", "behavioral-list-backlog"},
+        {"candidates", "scheduling-list-candidates"},
+        {"interventions", "behavioral-list-interventions"},
+        {"proposals", "procedural-list-proposals"},
+        {"schedule-proposals", "scheduling-list-proposals"},
+        {"status", "status"}
+    };
+    return aliases;
+}
+
+bool is_command_name(const std::string& value) {
+    const auto& commands = command_names();
     return std::find(commands.begin(), commands.end(), value) != commands.end();
+}
+
+std::optional<std::string> resolve_alias(const std::string& value) {
+    for (const auto& [alias, command] : alias_table()) {
+        if (alias == value) return command;
+    }
+    return std::nullopt;
+}
+
+std::vector<std::string> split_console_input(const std::string& line) {
+    std::istringstream input(line);
+    std::vector<std::string> tokens;
+    std::string token;
+    while (input >> token) tokens.push_back(token);
+    return tokens;
+}
+
+std::string trim_copy(const std::string& value) {
+    std::size_t start = 0;
+    while (start < value.size() && std::isspace(static_cast<unsigned char>(value[start]))) ++start;
+    std::size_t end = value.size();
+    while (end > start && std::isspace(static_cast<unsigned char>(value[end - 1]))) --end;
+    return value.substr(start, end - start);
+}
+
+std::string provider_config_id_for_name(const std::string& provider_name) { return "provider." + provider_name; }
+std::filesystem::path provider_secret_path(const std::filesystem::path& data_root, const std::string& provider_name) {
+    return data_root / "config" / "providers" / (provider_name + ".secret");
+}
+void write_secret_file(const std::filesystem::path& path, const std::string& api_key) {
+    if (path.has_parent_path()) std::filesystem::create_directories(path.parent_path());
+    std::ofstream out(path, std::ios::trunc);
+    out << api_key;
+}
+std::string read_secret_file(const std::filesystem::path& path) {
+    std::ifstream in(path);
+    std::string value;
+    std::getline(in, value);
+    return value;
+}
+std::string redact_secret(const std::string& value) {
+    if (value.empty()) return "unset";
+    if (value.size() <= 4) return "****";
+    return value.substr(0, 2) + "***" + value.substr(value.size() - 2);
+}
+std::string sanitize_for_storage(const std::string& value) {
+    auto out = value;
+    for (char& ch : out) {
+        if (ch == ';' || ch == '\n' || ch == '\r') ch = '_';
+    }
+    return out;
+}
+std::vector<std::string> deterministic_suggestions(const std::string& partial) {
+    std::vector<std::string> exact_commands;
+    std::vector<std::string> alias_matches;
+    std::vector<std::string> loose_commands;
+    for (const auto& command : command_names()) {
+        if (command == partial) exact_commands.push_back(command);
+        else if (starts_with(command, partial)) exact_commands.push_back(command);
+        else if (partial.empty() || command.find(partial) != std::string::npos) loose_commands.push_back(command);
+    }
+    for (const auto& [alias, command] : alias_table()) {
+        if (alias == partial || starts_with(alias, partial) || (!partial.empty() && alias.find(partial) != std::string::npos)) {
+            alias_matches.push_back(alias + "=>" + command);
+        }
+    }
+    std::sort(exact_commands.begin(), exact_commands.end());
+    std::sort(loose_commands.begin(), loose_commands.end());
+    std::sort(alias_matches.begin(), alias_matches.end());
+    std::vector<std::string> results;
+    results.insert(results.end(), exact_commands.begin(), exact_commands.end());
+    results.insert(results.end(), alias_matches.begin(), alias_matches.end());
+    results.insert(results.end(), loose_commands.begin(), loose_commands.end());
+    results.erase(std::unique(results.begin(), results.end()), results.end());
+    return results;
 }
 
 bool is_known_global_option(const std::string& value) {
@@ -113,6 +233,11 @@ bool is_allowed_command_option(ApplicationRunMode mode, const std::string& key) 
     }
     if (mode == ApplicationRunMode::BehavioralListInterventions) return key == "status" || key == "due-by" || key == "now";
     if (mode == ApplicationRunMode::BehavioralReevaluateBacklog) return key == "now";
+    if (mode == ApplicationRunMode::IntegrationSetProvider) return key == "provider-name" || key == "api-key" || key == "model-name";
+    if (mode == ApplicationRunMode::IntegrationShowProvider) return key == "provider-name";
+    if (mode == ApplicationRunMode::IntegrationTestProvider) return key == "provider-name";
+    if (mode == ApplicationRunMode::OperatorQuery) return key == "input";
+    if (mode == ApplicationRunMode::Suggest) return key == "input";
     return key == "now";
 }
 
@@ -133,6 +258,9 @@ std::string normalize_command_option_key(const std::string& key) {
     if (key == "sleep-quality") return "sleep_quality";
     if (key == "time-pressure") return "time_pressure";
     if (key == "due-by") return "due_by";
+    if (key == "provider-name") return "provider_name";
+    if (key == "api-key") return "api_key";
+    if (key == "model-name") return "model_name";
     return key;
 }
 
@@ -483,6 +611,74 @@ ApplicationExitCode execute_command(ApplicationRuntime& runtime,
         return code;
     };
 
+    auto find_provider_record = [&](const std::string& provider_name) -> std::optional<core::IntegrationConfigurationRecord> {
+        if (provider_name.empty()) return std::nullopt;
+        return runtime.integration_repository.get_by_id(provider_config_id_for_name(provider_name));
+    };
+
+    auto emit_provider_record = [&](const core::IntegrationConfigurationRecord& record) {
+        const auto secret = read_secret_file(runtime.config.data_root_path / record.credential_reference);
+        output << "provider_name=" << record.integration_id << '\n'
+               << "display_name=" << record.display_name << '\n'
+               << "enabled=" << (record.enabled ? "true" : "false") << '\n'
+               << "status=" << core::to_string(record.status) << '\n'
+               << "model_name=" << default_if_empty(record.non_secret_settings.contains("model_name") ? record.non_secret_settings.at("model_name") : std::string{}, "unset") << '\n'
+               << "credential_storage_mode=" << core::to_string(record.credential_storage_mode) << '\n'
+               << "credential_reference=" << record.credential_reference << '\n'
+               << "api_key_redacted=" << redact_secret(secret) << '\n'
+               << "updated_at=" << record.updated_at << '\n'
+               << "version=" << record.version << '\n';
+    };
+
+    auto run_stubbed_provider_request = [&](const core::IntegrationConfigurationRecord& record, const std::string& input) -> std::pair<bool, std::string> {
+        const auto secret_path = runtime.config.data_root_path / record.credential_reference;
+        const auto api_key = read_secret_file(secret_path);
+        if (api_key.empty()) return {false, "provider_not_ready=missing_api_key"};
+        const auto model_name = record.non_secret_settings.contains("model_name") ? record.non_secret_settings.at("model_name") : std::string{"unset"};
+        if (starts_with(api_key, "TEST_") || starts_with(api_key, "TEST") || record.integration_id == "stub") {
+            return {true, "provider_response=stubbed\nprovider_name=" + record.integration_id + "\nmodel_name=" + model_name + "\nresponse_text=Stub response for input: " + input + "\n"};
+        }
+        return {false, "provider_not_ready=unsupported_live_transport"};
+    };
+
+    auto resolve_operator_input = [&](const std::string& raw_input, std::ostream& routed_output, std::ostream& routed_error) -> ApplicationExitCode {
+        const auto input = trim_copy(raw_input);
+        if (input.empty()) {
+            routed_error << "operator_query=failed\nmessage=empty_input\n";
+            return ApplicationExitCode::CommandValidationFailure;
+        }
+        const auto tokens = split_console_input(input);
+        if (!tokens.empty()) {
+            const auto exact = tokens.front();
+            const auto alias = resolve_alias(exact);
+            if (is_command_name(exact) || alias.has_value()) {
+                std::vector<std::string> forwarded;
+                forwarded.push_back(alias.value_or(exact));
+                for (std::size_t i = 1; i < tokens.size(); ++i) forwarded.push_back(tokens[i]);
+                forwarded.push_back("--data-root=" + runtime.config.data_root_path.string());
+                forwarded.push_back("--quiet-startup");
+                return static_cast<ApplicationExitCode>(run_application(forwarded, routed_output, routed_error, runtime.config.data_root_path.string(), std::filesystem::current_path()));
+            }
+        }
+
+        const auto providers = runtime.integration_repository.list_all();
+        if (providers.empty()) {
+            routed_error << "operator_query=failed\nmessage=no_provider_configured\n";
+            return ApplicationExitCode::RuntimeOperationFailure;
+        }
+        const auto& provider = providers.front();
+        routed_output << "operator_query=llm_fallback\n";
+        routed_output << "provider_request_provider_name=" << provider.integration_id << '\n';
+        routed_output << "provider_request_model_name=" << default_if_empty(provider.non_secret_settings.contains("model_name") ? provider.non_secret_settings.at("model_name") : std::string{}, "unset") << '\n';
+        auto [ok, response_text] = run_stubbed_provider_request(provider, input);
+        if (!ok) {
+            routed_error << "operator_query=failed\nmessage=" << response_text << '\n';
+            return ApplicationExitCode::RuntimeOperationFailure;
+        }
+        routed_output << response_text;
+        return ApplicationExitCode::Success;
+    };
+
     switch (runtime.config.run_mode) {
         case ApplicationRunMode::Status: {
             const auto summary = runtime.memory_store.get_memory_summary();
@@ -501,6 +697,7 @@ ApplicationExitCode execute_command(ApplicationRuntime& runtime,
                    << "registered_module_count=" << runtime.module_registry.all_modules().size() << '\n'
                    << "memory_available=1\n"
                    << "integration_record_count=" << runtime.integration_repository.list_all().size() << '\n'
+                   << "configured_provider_count=" << runtime.integration_repository.list_all().size() << '\n'
                    << "activity_inventory_count=" << procedural.value->activity_inventory_count << '\n'
                    << "procedural_audit_run_count=" << procedural.value->audit_run_count << '\n'
                    << "optimization_proposal_count=" << procedural.value->optimization_proposal_count << '\n'
@@ -951,6 +1148,137 @@ ApplicationExitCode execute_command(ApplicationRuntime& runtime,
                                        {"status", run.status}});
             }
             return complete(ApplicationExitCode::Success, "Procedural audit run listing completed.");
+        }
+        case ApplicationRunMode::IntegrationSetProvider: {
+            static const std::vector<std::string> required = {"provider_name", "api_key", "model_name"};
+            for (const auto& key : required) {
+                if (!runtime.config.command_parameters.contains(key) || runtime.config.command_parameters.at(key).empty()) {
+                    error << "integration_set_provider=failed\nmessage=missing_" << key << '\n';
+                    return complete(ApplicationExitCode::CommandValidationFailure, "Missing required argument: " + key);
+                }
+            }
+            const auto now = core::current_timestamp_utc();
+            const auto provider_name = sanitize_for_storage(runtime.config.command_parameters.at("provider_name"));
+            const auto secret_relative = std::filesystem::relative(provider_secret_path(runtime.config.data_root_path, provider_name), runtime.config.data_root_path).string();
+            write_secret_file(provider_secret_path(runtime.config.data_root_path, provider_name), runtime.config.command_parameters.at("api_key"));
+            auto existing = find_provider_record(provider_name);
+            core::IntegrationConfigurationRecord record{.integration_config_id = provider_config_id_for_name(provider_name),
+                                                        .integration_id = provider_name,
+                                                        .display_name = provider_name,
+                                                        .enabled = true,
+                                                        .status = core::IntegrationStatus::Enabled,
+                                                        .capability_visibility = {"operator-query", "integration-test-provider"},
+                                                        .connection_diagnostics = {},
+                                                        .credential_storage_mode = core::CredentialStorageMode::ExternalSecretReference,
+                                                        .credential_reference = secret_relative,
+                                                        .non_secret_settings = {{"model_name", sanitize_for_storage(runtime.config.command_parameters.at("model_name"))}},
+                                                        .created_at = existing ? existing->created_at : now,
+                                                        .updated_at = now,
+                                                        .version = existing ? existing->version + 1 : 1};
+            const auto upsert_result = runtime.integration_repository.upsert(record);
+            if (!upsert_result.ok || !runtime.integration_repository.persist_manifest().ok) {
+                error << "integration_set_provider=failed\nmessage=" << upsert_result.message << '\n';
+                return complete(ApplicationExitCode::RuntimeOperationFailure, upsert_result.message);
+            }
+            output << "integration_set_provider=ok\n"
+                   << "provider_name=" << provider_name << '\n'
+                   << "model_name=" << record.non_secret_settings.at("model_name") << '\n'
+                   << "credential_reference=" << record.credential_reference << '\n'
+                   << "api_key_redacted=" << redact_secret(runtime.config.command_parameters.at("api_key")) << '\n'
+                   << "version=" << record.version << '\n';
+            return complete(ApplicationExitCode::Success, "Integration provider configured.");
+        }
+        case ApplicationRunMode::IntegrationShowProvider: {
+            const auto provider_name = runtime.config.command_parameters.contains("provider_name") ? runtime.config.command_parameters.at("provider_name") : std::string{};
+            const auto record = find_provider_record(provider_name);
+            if (!record) {
+                error << "integration_show_provider=failed\nmessage=provider_not_found\n";
+                return complete(ApplicationExitCode::RuntimeOperationFailure, "Provider not found.");
+            }
+            output << "integration_show_provider=ok\n";
+            emit_provider_record(*record);
+            return complete(ApplicationExitCode::Success, "Integration provider shown.");
+        }
+        case ApplicationRunMode::IntegrationListProviders: {
+            const auto providers = runtime.integration_repository.list_all();
+            output << "integration_list_providers=ok\n"
+                   << "provider_count=" << providers.size() << '\n';
+            for (const auto& record : providers) {
+                const auto secret = read_secret_file(runtime.config.data_root_path / record.credential_reference);
+                emit_ordered_kv_block(output, {{"provider_name", record.integration_id},
+                                               {"enabled", record.enabled ? "true" : "false"},
+                                               {"status", core::to_string(record.status)},
+                                               {"model_name", default_if_empty(record.non_secret_settings.contains("model_name") ? record.non_secret_settings.at("model_name") : std::string{}, "unset")},
+                                               {"api_key_redacted", redact_secret(secret)}});
+            }
+            return complete(ApplicationExitCode::Success, "Integration providers listed.");
+        }
+        case ApplicationRunMode::IntegrationTestProvider: {
+            const auto provider_name = runtime.config.command_parameters.contains("provider_name") ? runtime.config.command_parameters.at("provider_name") : (runtime.integration_repository.list_all().empty() ? std::string{} : runtime.integration_repository.list_all().front().integration_id);
+            const auto record = find_provider_record(provider_name);
+            if (!record) {
+                error << "integration_test_provider=failed\nmessage=provider_not_found\n";
+                return complete(ApplicationExitCode::RuntimeOperationFailure, "Provider not found.");
+            }
+            auto [ok, response_text] = run_stubbed_provider_request(*record, "integration readiness check");
+            if (!ok) {
+                error << "integration_test_provider=failed\nmessage=" << response_text << '\n';
+                return complete(ApplicationExitCode::RuntimeOperationFailure, response_text);
+            }
+            output << "integration_test_provider=ok\nprovider_name=" << record->integration_id << '\n'
+                   << "model_name=" << default_if_empty(record->non_secret_settings.contains("model_name") ? record->non_secret_settings.at("model_name") : std::string{}, "unset") << '\n'
+                   << "ready=true\ntransport=stub\n";
+            return complete(ApplicationExitCode::Success, "Integration provider readiness succeeded.");
+        }
+        case ApplicationRunMode::OperatorQuery: {
+            const auto input = runtime.config.command_parameters.contains("input") ? runtime.config.command_parameters.at("input") : std::string{};
+            return complete(resolve_operator_input(input, output, error), "Operator query completed.");
+        }
+        case ApplicationRunMode::OperatorConsole: {
+            output << "operator_console=ok\n"
+                   << "prompt=life-orchestrator>\n";
+            std::string line;
+            while (std::getline(std::cin, line)) {
+                const auto trimmed = trim_copy(line);
+                if (trimmed == "exit" || trimmed == "quit") {
+                    output << "operator_console=bye\n";
+                    return complete(ApplicationExitCode::Success, "Operator console exited.");
+                }
+                if (trimmed.empty()) {
+                    output << "prompt=life-orchestrator>\n";
+                    continue;
+                }
+                std::ostringstream loop_out;
+                std::ostringstream loop_err;
+                const auto code = resolve_operator_input(trimmed, loop_out, loop_err);
+                output << loop_out.str();
+                error << loop_err.str();
+                output << "prompt=life-orchestrator>\n";
+                if (code != ApplicationExitCode::Success) error << "operator_console_last_exit_code=" << to_string(code) << '\n';
+            }
+            return complete(ApplicationExitCode::Success, "Operator console exited on EOF.");
+        }
+        case ApplicationRunMode::Help:
+        case ApplicationRunMode::Commands: {
+            output << (runtime.config.run_mode == ApplicationRunMode::Help ? "help=ok\n" : "commands=ok\n")
+                   << "command_count=" << command_names().size() << '\n';
+            for (const auto& command : command_names()) output << "command=" << command << '\n';
+            return complete(ApplicationExitCode::Success, "Command list emitted.");
+        }
+        case ApplicationRunMode::Aliases: {
+            output << "aliases=ok\n"
+                   << "alias_count=" << alias_table().size() << '\n';
+            for (const auto& [alias, command] : alias_table()) output << "alias=" << alias << ";command=" << command << '\n';
+            return complete(ApplicationExitCode::Success, "Aliases emitted.");
+        }
+        case ApplicationRunMode::Suggest: {
+            const auto partial = runtime.config.command_parameters.contains("input") ? runtime.config.command_parameters.at("input") : std::string{};
+            const auto suggestions = deterministic_suggestions(partial);
+            output << "suggest=ok\n"
+                   << "input=" << partial << '\n'
+                   << "suggestion_count=" << suggestions.size() << '\n';
+            for (const auto& suggestion : suggestions) output << "suggestion=" << suggestion << '\n';
+            return complete(ApplicationExitCode::Success, "Suggestions emitted.");
         }
         case ApplicationRunMode::BootstrapCheck: {
             const bool event_log_exists = std::filesystem::exists(runtime.config.events_file_path);
