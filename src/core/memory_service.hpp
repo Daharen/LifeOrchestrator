@@ -20,6 +20,7 @@ public:
     MemoryResult upsert_scheduled_commitment(const ScheduledCommitment& record);
     MemoryResult append_task_candidate(const SchedulingTaskCandidate& record);
     MemoryResult upsert_scheduling_candidate_record(const SchedulingCandidateRecord& record);
+    MemoryResult upsert_schedule_proposal_artifact(const ScheduleProposalArtifact& record);
     MemoryResult upsert_availability_window(const AvailabilityWindow& record);
     MemoryResult upsert_constraint_set(const SchedulingConstraintSet& record);
     MemoryResult append_proposal(const SchedulingProposal& record);
@@ -46,6 +47,8 @@ public:
         const TimestampString& end_time) const;
     MemoryResultWith<std::vector<SchedulingCandidateRecord>> list_scheduling_candidate_records() const;
     MemoryResultWith<SchedulingCandidateRecord> get_scheduling_candidate_record_by_id(const SchedulingCandidateId& candidate_id) const;
+    MemoryResultWith<std::vector<ScheduleProposalArtifact>> list_schedule_proposal_artifacts() const;
+    MemoryResultWith<ScheduleProposalArtifact> get_schedule_proposal_artifact_by_id(const ScheduleProposalArtifactId& proposal_id) const;
     MemoryResultWith<std::vector<SchedulingProposal>> list_proposals_for_task_candidate(
         const ScheduleItemId& task_candidate_id) const;
     MemoryResultWith<std::vector<SchedulingConflict>> list_conflicts(const TimestampString& start_time,

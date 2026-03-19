@@ -84,6 +84,7 @@ using ConstraintSetId = std::string;
 using WindowId = std::string;
 using ScheduleDecisionId = std::string;
 using SchedulingCandidateId = std::string;
+using ScheduleProposalArtifactId = std::string;
 
 using StringMap = std::unordered_map<std::string, std::string>;
 
@@ -180,6 +181,19 @@ enum class SchedulingCandidateStatus {
     Deferred,
     ScheduledProposalGenerated,
     Rejected
+};
+
+enum class ScheduleProposalArtifactStatus {
+    Proposed,
+    ConflictDetected,
+    Superseded,
+    Rejected
+};
+
+enum class ScheduleProposalConflictStatus {
+    None,
+    PotentialConflict,
+    Blocked
 };
 
 struct ScheduledCommitment {
@@ -303,6 +317,28 @@ struct SchedulingCandidateRecord {
     std::uint64_t version;
 };
 
+struct ScheduleProposalArtifact {
+    ScheduleProposalArtifactId schedule_proposal_id;
+    SchedulingCandidateId source_candidate_id;
+    std::string source_intervention_id;
+    std::string source_proposal_id;
+    std::string source_audit_run_id;
+    std::string source_activity_id;
+    TimestampString proposed_start_time;
+    TimestampString proposed_end_time;
+    std::string timezone;
+    int duration_minutes;
+    std::string scheduling_window_hint;
+    std::string recommended_time_of_day;
+    std::string rationale;
+    ScheduleProposalArtifactStatus proposal_status;
+    ScheduleProposalConflictStatus conflict_status;
+    std::string source_module_id;
+    TimestampString created_at;
+    TimestampString updated_at;
+    std::uint64_t version;
+};
+
 std::string to_string(ModuleClass value);
 std::string to_string(RiskTier value);
 std::string to_string(ExecutionStatus value);
@@ -314,6 +350,8 @@ std::string to_string(SchedulingPriority value);
 std::string to_string(ProposalStatus value);
 std::string to_string(SchedulingOperationType value);
 std::string to_string(SchedulingCandidateStatus value);
+std::string to_string(ScheduleProposalArtifactStatus value);
+std::string to_string(ScheduleProposalConflictStatus value);
 TimestampString current_timestamp_utc();
 
 }  // namespace life_orchestrator::core

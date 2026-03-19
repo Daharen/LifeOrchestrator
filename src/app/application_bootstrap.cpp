@@ -1,4 +1,5 @@
 #include "app/application_bootstrap.hpp"
+#include "coordination/scheduling_engine.hpp"
 
 #include <algorithm>
 #include <cstdlib>
@@ -39,6 +40,8 @@ ApplicationRunMode parse_run_mode(const std::string& value) {
     if (value == "behavioral-status") return ApplicationRunMode::BehavioralStatus;
     if (value == "scheduling-generate-candidates") return ApplicationRunMode::SchedulingGenerateCandidates;
     if (value == "scheduling-list-candidates") return ApplicationRunMode::SchedulingListCandidates;
+    if (value == "scheduling-generate-proposals") return ApplicationRunMode::SchedulingGenerateProposals;
+    if (value == "scheduling-list-proposals") return ApplicationRunMode::SchedulingListProposals;
     if (value == "procedural-health-check") return ApplicationRunMode::ProceduralHealthCheck;
     if (value == "procedural-list-proposals") return ApplicationRunMode::ProceduralListProposals;
     if (value == "procedural-upsert-activity") return ApplicationRunMode::ProceduralUpsertActivity;
@@ -62,6 +65,8 @@ std::string run_mode_name(ApplicationRunMode mode) {
         case ApplicationRunMode::BehavioralStatus: return "behavioral-status";
         case ApplicationRunMode::SchedulingGenerateCandidates: return "scheduling-generate-candidates";
         case ApplicationRunMode::SchedulingListCandidates: return "scheduling-list-candidates";
+        case ApplicationRunMode::SchedulingGenerateProposals: return "scheduling-generate-proposals";
+        case ApplicationRunMode::SchedulingListProposals: return "scheduling-list-proposals";
         case ApplicationRunMode::ProceduralHealthCheck: return "procedural-health-check";
         case ApplicationRunMode::ProceduralListProposals: return "procedural-list-proposals";
         case ApplicationRunMode::ProceduralUpsertActivity: return "procedural-upsert-activity";
@@ -84,7 +89,7 @@ std::string value_after_equals(const std::string& arg) {
 
 bool is_command_name(const std::string& value) {
     static const std::vector<std::string> commands = {
-        "status", "list-modules", "schedule-health-check", "behavioral-health-check", "behavioral-list-backlog", "behavioral-record-state", "behavioral-list-interventions", "behavioral-reevaluate-backlog", "behavioral-list-reevaluations", "behavioral-status", "scheduling-generate-candidates", "scheduling-list-candidates",
+        "status", "list-modules", "schedule-health-check", "behavioral-health-check", "behavioral-list-backlog", "behavioral-record-state", "behavioral-list-interventions", "behavioral-reevaluate-backlog", "behavioral-list-reevaluations", "behavioral-status", "scheduling-generate-candidates", "scheduling-list-candidates", "scheduling-generate-proposals", "scheduling-list-proposals",
         "procedural-health-check", "procedural-list-proposals", "procedural-upsert-activity", "procedural-list-activities",
         "procedural-run-audit", "procedural-list-audit-runs", "bootstrap-check"};
     return std::find(commands.begin(), commands.end(), value) != commands.end();
@@ -201,6 +206,91 @@ std::string recommended_day_span(const std::string& scheduling_window_hint) {
 
 std::string candidate_id_for_intervention(const core::BehavioralInterventionRecord& intervention) {
     return "candidate." + intervention.intervention_id;
+}
+
+std::string date_prefix(const std::string& timestamp) {
+    return timestamp.size() >= 10 ? timestamp.substr(0, 10) : std::string{"1970-01-01"};
+}
+
+std::string join_timestamp(const std::string& date, const std::string& hhmm) {
+    return date + "T" + hhmm + ":00.000Z";
+}
+
+std::string preferred_start_hhmm(const std::string& time_of_day) {
+    if (time_of_day == "morning") return "09:00";
+    if (time_of_day == "midday") return "12:00";
+    if (time_of_day == "afternoon") return "15:00";
+    if (time_of_day == "evening") return "18:00";
+    return "10:00";
+}
+
+std::string add_days_same_month(const std::string& timestamp, int days_to_add) {
+    if (timestamp.size() < 10) return "1970-01-01T00:00:00.000Z";
+    const int day = std::stoi(timestamp.substr(8, 2));
+    const int shifted = std::max(1, std::min(28, day + days_to_add));
+    std::string updated = timestamp;
+    updated.replace(8, 2, (shifted < 10 ? "0" : "") + std::to_string(shifted));
+    return updated;
+}
+
+core::SchedulingTaskCandidate build_task_candidate_from_record(const core::SchedulingCandidateRecord& candidate) {
+    const auto base_date = date_prefix(candidate.created_at);
+    const auto start = join_timestamp(base_date, preferred_start_hhmm(default_if_empty(candidate.recommended_time_of_day, "unspecified")));
+    const auto span_days = std::max(1, safe_parse_int(candidate.recommended_day_span, candidate.scheduling_window_hint == "next_24_hours" ? 1 : (candidate.scheduling_window_hint == "next_3_days" ? 3 : 7)));
+    const auto latest = add_days_same_month(join_timestamp(base_date, "17:00"), span_days - 1);
+    return {candidate.candidate_id,
+            candidate.source_activity_id,
+            candidate.source_intervention_id,
+            candidate.rationale,
+            std::max(0, candidate.estimated_duration_minutes),
+            start,
+            latest,
+            candidate.urgency == "Critical" ? core::SchedulingPriority::Critical : (candidate.urgency == "High" ? core::SchedulingPriority::High : (candidate.urgency == "Low" ? core::SchedulingPriority::Low : core::SchedulingPriority::Normal)),
+            false,
+            0,
+            0,
+            {},
+            "coordination.scheduling",
+            candidate.created_at,
+            candidate.updated_at,
+            candidate.version,
+            core::ScheduleStatus::Pending};
+}
+
+std::string schedule_proposal_artifact_id_for_candidate(const core::SchedulingCandidateRecord& candidate,
+                                                        const std::string& start_time) {
+    return "schedule_proposal." + candidate.candidate_id + "." + (start_time.empty() ? std::string{"unspecified"} : start_time);
+}
+
+core::ScheduleProposalArtifact build_schedule_proposal_artifact(const core::SchedulingCandidateRecord& candidate,
+                                                                const std::optional<core::SchedulingProposal>& proposal,
+                                                                const std::vector<core::SchedulingConflict>& conflicts,
+                                                                const std::string& now) {
+    const bool blocked = candidate.status != core::SchedulingCandidateStatus::Candidate || candidate.estimated_duration_minutes <= 0 || !proposal.has_value();
+    const bool has_conflict = !conflicts.empty();
+    const auto proposal_status = blocked ? core::ScheduleProposalArtifactStatus::Rejected : (has_conflict ? core::ScheduleProposalArtifactStatus::ConflictDetected : core::ScheduleProposalArtifactStatus::Proposed);
+    const auto conflict_status = blocked ? core::ScheduleProposalConflictStatus::Blocked : (has_conflict ? core::ScheduleProposalConflictStatus::PotentialConflict : core::ScheduleProposalConflictStatus::None);
+    const auto start_time = proposal ? proposal->proposed_start_time : std::string{"unspecified"};
+    const auto end_time = proposal ? proposal->proposed_end_time : std::string{"unspecified"};
+    return {schedule_proposal_artifact_id_for_candidate(candidate, start_time),
+            candidate.candidate_id,
+            default_if_empty(candidate.source_intervention_id, "none"),
+            default_if_empty(candidate.source_proposal_id, "none"),
+            default_if_empty(candidate.source_audit_run_id, "none"),
+            default_if_empty(candidate.source_activity_id, "none"),
+            start_time,
+            end_time,
+            proposal ? default_if_empty(proposal->timezone, "UTC") : std::string{"UTC"},
+            std::max(0, candidate.estimated_duration_minutes),
+            default_if_empty(candidate.scheduling_window_hint, "unspecified"),
+            default_if_empty(candidate.recommended_time_of_day, "unspecified"),
+            default_if_empty(candidate.rationale, "none"),
+            proposal_status,
+            conflict_status,
+            "coordination.scheduling",
+            now,
+            now,
+            1};
 }
 
 core::SchedulingCandidateRecord build_scheduling_candidate(const core::BehavioralInterventionRecord& intervention,
@@ -418,6 +508,7 @@ ApplicationExitCode execute_command(ApplicationRuntime& runtime,
                    << "behavioral_backlog_count=" << summary.value->behavioral_backlog_count << '\n'
                    << "behavioral_intervention_count=" << summary.value->behavioral_intervention_count << '\n'
                    << "scheduling_candidate_count=" << summary.value->scheduling_candidate_count << '\n'
+                   << "scheduling_proposal_count=" << summary.value->scheduling_proposal_count << '\n'
                    << "behavioral_reevaluation_artifact_count=" << summary.value->behavioral_reevaluation_artifact_count << '\n';
             return complete(ApplicationExitCode::Success, "Status command completed.");
         }
@@ -656,6 +747,87 @@ ApplicationExitCode execute_command(ApplicationRuntime& runtime,
                                                {"status", core::to_string(candidate.status)}});
             }
             return complete(ApplicationExitCode::Success, "Scheduling list candidates completed.");
+        }
+        case ApplicationRunMode::SchedulingGenerateProposals: {
+            const auto candidates = runtime.memory_service.list_scheduling_candidate_records();
+            if (!candidates.ok) {
+                error << "scheduling_generate_proposals=failed\nmessage=" << candidates.message << '\n';
+                return complete(ApplicationExitCode::RuntimeOperationFailure, candidates.message);
+            }
+            coordination::SchedulingEngine engine;
+            const auto now = runtime.config.command_parameters.contains("now") ? runtime.config.command_parameters.at("now") : "1970-01-01T00:00:00.000Z";
+            std::size_t proposal_count = 0;
+            std::size_t conflict_count = 0;
+            for (const auto& candidate : *candidates.value) {
+                const auto task_candidate = build_task_candidate_from_record(candidate);
+                core::SchedulingConstraintSet constraint_set{"constraint.schedule_proposal.internal", 16, 0, true, {}, {}, {}, "coordination.scheduling", candidate.created_at, candidate.updated_at, 1};
+                std::vector<core::SchedulingConflict> conflicts;
+                auto generated = engine.generate_proposals(task_candidate, {}, {}, &constraint_set, "coordination.scheduling", candidate.updated_at, &conflicts);
+                auto artifact = build_schedule_proposal_artifact(candidate, generated.empty() ? std::nullopt : std::optional<core::SchedulingProposal>(generated.front()), conflicts, now);
+                const auto existing = runtime.memory_service.get_schedule_proposal_artifact_by_id(artifact.schedule_proposal_id);
+                if (existing.ok) {
+                    artifact.created_at = existing.value->created_at;
+                    artifact.version = existing.value->version;
+                    if (existing.value->source_candidate_id == artifact.source_candidate_id &&
+                        existing.value->source_intervention_id == artifact.source_intervention_id &&
+                        existing.value->source_proposal_id == artifact.source_proposal_id &&
+                        existing.value->source_audit_run_id == artifact.source_audit_run_id &&
+                        existing.value->source_activity_id == artifact.source_activity_id &&
+                        existing.value->proposed_start_time == artifact.proposed_start_time &&
+                        existing.value->proposed_end_time == artifact.proposed_end_time &&
+                        existing.value->timezone == artifact.timezone &&
+                        existing.value->duration_minutes == artifact.duration_minutes &&
+                        existing.value->scheduling_window_hint == artifact.scheduling_window_hint &&
+                        existing.value->recommended_time_of_day == artifact.recommended_time_of_day &&
+                        existing.value->rationale == artifact.rationale &&
+                        existing.value->proposal_status == artifact.proposal_status &&
+                        existing.value->conflict_status == artifact.conflict_status) {
+                        artifact.updated_at = existing.value->updated_at;
+                    } else {
+                        artifact.version = existing.value->version + 1;
+                    }
+                }
+                const auto persist = runtime.memory_service.upsert_schedule_proposal_artifact(artifact);
+                if (!persist.ok) {
+                    error << "scheduling_generate_proposals=failed\nmessage=" << persist.message << '\n';
+                    return complete(ApplicationExitCode::RuntimeOperationFailure, persist.message);
+                }
+                if (artifact.conflict_status != core::ScheduleProposalConflictStatus::None) ++conflict_count;
+                ++proposal_count;
+            }
+            runtime.memory_store.persist_to_disk();
+            output << "scheduling_generate_proposals=ok\n"
+                   << "candidate_count=" << candidates.value->size() << '\n'
+                   << "proposal_count=" << proposal_count << '\n'
+                   << "conflict_count=" << conflict_count << '\n';
+            return complete(ApplicationExitCode::Success, "Scheduling proposal generation completed.");
+        }
+        case ApplicationRunMode::SchedulingListProposals: {
+            const auto proposals = runtime.memory_service.list_schedule_proposal_artifacts();
+            if (!proposals.ok) {
+                error << "scheduling_list_proposals=failed\nmessage=" << proposals.message << '\n';
+                return complete(ApplicationExitCode::RuntimeOperationFailure, proposals.message);
+            }
+            output << "scheduling_list_proposals=ok\n"
+                   << "proposal_count=" << proposals.value->size() << '\n';
+            for (const auto& proposal : *proposals.value) {
+                emit_ordered_kv_block(output, {{"schedule_proposal_id", proposal.schedule_proposal_id},
+                                               {"source_candidate_id", default_if_empty(proposal.source_candidate_id, "none")},
+                                               {"source_intervention_id", default_if_empty(proposal.source_intervention_id, "none")},
+                                               {"source_proposal_id", default_if_empty(proposal.source_proposal_id, "none")},
+                                               {"source_audit_run_id", default_if_empty(proposal.source_audit_run_id, "none")},
+                                               {"source_activity_id", default_if_empty(proposal.source_activity_id, "none")},
+                                               {"proposed_start_time", default_if_empty(proposal.proposed_start_time, "unspecified")},
+                                               {"proposed_end_time", default_if_empty(proposal.proposed_end_time, "unspecified")},
+                                               {"timezone", default_if_empty(proposal.timezone, "UTC")},
+                                               {"duration_minutes", std::to_string(proposal.duration_minutes)},
+                                               {"scheduling_window_hint", default_if_empty(proposal.scheduling_window_hint, "unspecified")},
+                                               {"recommended_time_of_day", default_if_empty(proposal.recommended_time_of_day, "unspecified")},
+                                               {"rationale", default_if_empty(proposal.rationale, "none")},
+                                               {"proposal_status", core::to_string(proposal.proposal_status)},
+                                               {"conflict_status", core::to_string(proposal.conflict_status)}});
+            }
+            return complete(ApplicationExitCode::Success, "Scheduling list proposals completed.");
         }
         case ApplicationRunMode::ProceduralHealthCheck: {
             const auto state = runtime.control_plane.dispatch({"app-procedural-state", "behavioral.record_state", "life_orchestrator_app", core::RiskTier::Suggestive, {{"behavioral_state_snapshot_id", "state.procedural.health"}, {"captured_at", "2026-03-18T09:00:00.000Z"}, {"active_intervention_count", "0"}, {"backlog_count", "0"}, {"schedule_density_score", "0.2"}, {"recent_compliance_rate", "0.9"}, {"recent_failure_frequency", "0.1"}, {"fatigue_score", "0.2"}, {"stress_score", "0.2"}, {"decision_time", "2026-03-18T09:00:00.000Z"}}, "2026-03-18T09:00:00.000Z"});
