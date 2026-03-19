@@ -4,6 +4,19 @@
 
 namespace life_orchestrator::meta {
 namespace core = life_orchestrator::core;
+namespace {
+int to_int_attribute(const core::ProceduralAttributes& attributes, const std::string& key, int fallback) {
+    const auto it = attributes.find(key);
+    if (it == attributes.end() || it->second.empty()) return fallback;
+    return std::stoi(it->second);
+}
+
+std::string stable_proposal_id(const core::ActivityInventoryItem& item,
+                               core::OptimizationOpportunityType opportunity,
+                               core::EffortValueClassification classification) {
+    return "proposal." + item.activity_inventory_item_id + "." + core::to_string(opportunity) + "." + core::to_string(classification);
+}
+}
 
 core::EffortValueClassification ProceduralAuditorEngine::classify(const core::ActivityInventoryItem& item) const {
     const bool high_effort = item.effort_estimate >= 7 || item.duration_minutes >= 60;
@@ -56,14 +69,34 @@ std::vector<core::OptimizationProposalRecord> ProceduralAuditorEngine::audit(
         const auto opportunity = derive_opportunity_type(item);
         const auto classification = classify(item);
         const auto recovery = estimate_energy_recovery(item, opportunity);
-        out.push_back({"proposal." + item.activity_inventory_item_id,
+        const auto necessity = to_int_attribute(item.attributes, "necessity", 3);
+        const auto cognitive_load = to_int_attribute(item.attributes, "cognitive_load", item.effort_estimate);
+        const auto stress_load = to_int_attribute(item.attributes, "stress_load", std::max(1, item.effort_estimate - 1));
+        const auto financial_cost = to_int_attribute(item.attributes, "financial_cost", 0);
+        const auto marginal_benefit = std::max(1, (item.outcome_value * 2) - necessity);
+        const bool diminishing_returns = item.outcome_value >= 7 && item.effort_estimate <= 4;
+        const auto feasibility = opportunity == core::OptimizationOpportunityType::Automation
+                                     ? (item.attributes.contains("repeatable") && item.duration_minutes >= 30 ? core::AutomationFeasibility::High : core::AutomationFeasibility::Medium)
+                                     : core::AutomationFeasibility::NotApplicable;
+        const double reliability = opportunity == core::OptimizationOpportunityType::Automation ? 0.85 : (opportunity == core::OptimizationOpportunityType::Delegation ? 0.72 : 0.78);
+        std::string rationale = "Deterministic procedural optimization derived from effort/value analysis.";
+        if (opportunity == core::OptimizationOpportunityType::StructuralOptimization || opportunity == core::OptimizationOpportunityType::Simplification) {
+            rationale += " Friction reduction rationale: remove repeated context switching and lower operational drag.";
+        }
+        if (opportunity == core::OptimizationOpportunityType::Delegation) {
+            rationale += " Delegation recommendation balances time recovery against explicit financial cost.";
+        }
+        if (opportunity == core::OptimizationOpportunityType::Automation) {
+            rationale += " Automation recommendation includes feasibility and reliability estimates.";
+        }
+        out.push_back({stable_proposal_id(item, opportunity, classification),
                        audit_run_id,
                        item.activity_inventory_item_id,
                        opportunity,
                        classification,
                        recovery,
                        "Optimize " + item.title,
-                       "Deterministic procedural optimization derived from effort/value analysis.",
+                       rationale,
                        source_module_id,
                        now,
                        now,
@@ -71,7 +104,23 @@ std::vector<core::OptimizationProposalRecord> ProceduralAuditorEngine::audit(
                        "",
                        "Pending",
                        "",
-                       {{"domain_source", item.domain_source}, {"frequency", item.frequency}}});
+                       feasibility,
+                       classification == core::EffortValueClassification::HighEffortLowValue ? "High" : "Moderate",
+                       reliability,
+                       recovery.recovered_minutes_per_week,
+                       std::max(1, recovery.recovered_effort_points - cognitive_load),
+                       std::max(1, recovery.recovered_effort_points - stress_load),
+                       opportunity == core::OptimizationOpportunityType::Delegation ? std::max(10, financial_cost) : financial_cost,
+                       marginal_benefit,
+                       diminishing_returns,
+                       audit_run_id,
+                       {{"domain_source", item.domain_source},
+                        {"frequency", item.frequency},
+                        {"activity_analyzed", item.title},
+                        {"estimated_effort_points", std::to_string(item.effort_estimate)},
+                        {"estimated_energy_recovery_minutes", std::to_string(recovery.recovered_minutes_per_week)},
+                        {"proposed_optimization", core::to_string(opportunity)},
+                        {"friction_reduction_rationale", (opportunity == core::OptimizationOpportunityType::StructuralOptimization || opportunity == core::OptimizationOpportunityType::Simplification) ? "Reduce repetitive friction and context switching." : ""}}});
     }
     return out;
 }

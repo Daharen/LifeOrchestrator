@@ -25,6 +25,10 @@ enum class ApplicationRunMode {
     BehavioralListBacklog,
     ProceduralHealthCheck,
     ProceduralListProposals,
+    ProceduralUpsertActivity,
+    ProceduralListActivities,
+    ProceduralRunAudit,
+    ProceduralListAuditRuns,
     BootstrapCheck
 };
 
@@ -45,6 +49,7 @@ struct ApplicationBootstrapConfig {
     ApplicationRunMode run_mode;
     bool allow_seed_data;
     bool log_startup_summary;
+    core::StringMap command_parameters;
 };
 
 struct ApplicationBootstrapResult {
