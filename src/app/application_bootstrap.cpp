@@ -34,6 +34,7 @@ ApplicationRunMode parse_run_mode(const std::string& value) {
     if (value == "behavioral-record-state") return ApplicationRunMode::BehavioralRecordState;
     if (value == "behavioral-list-interventions") return ApplicationRunMode::BehavioralListInterventions;
     if (value == "behavioral-reevaluate-backlog") return ApplicationRunMode::BehavioralReevaluateBacklog;
+    if (value == "behavioral-list-reevaluations") return ApplicationRunMode::BehavioralListReevaluations;
     if (value == "behavioral-status") return ApplicationRunMode::BehavioralStatus;
     if (value == "procedural-health-check") return ApplicationRunMode::ProceduralHealthCheck;
     if (value == "procedural-list-proposals") return ApplicationRunMode::ProceduralListProposals;
@@ -54,6 +55,7 @@ std::string run_mode_name(ApplicationRunMode mode) {
         case ApplicationRunMode::BehavioralRecordState: return "behavioral-record-state";
         case ApplicationRunMode::BehavioralListInterventions: return "behavioral-list-interventions";
         case ApplicationRunMode::BehavioralReevaluateBacklog: return "behavioral-reevaluate-backlog";
+        case ApplicationRunMode::BehavioralListReevaluations: return "behavioral-list-reevaluations";
         case ApplicationRunMode::BehavioralStatus: return "behavioral-status";
         case ApplicationRunMode::ProceduralHealthCheck: return "procedural-health-check";
         case ApplicationRunMode::ProceduralListProposals: return "procedural-list-proposals";
@@ -77,7 +79,7 @@ std::string value_after_equals(const std::string& arg) {
 
 bool is_command_name(const std::string& value) {
     static const std::vector<std::string> commands = {
-        "status", "list-modules", "schedule-health-check", "behavioral-health-check", "behavioral-list-backlog", "behavioral-record-state", "behavioral-list-interventions", "behavioral-reevaluate-backlog", "behavioral-status",
+        "status", "list-modules", "schedule-health-check", "behavioral-health-check", "behavioral-list-backlog", "behavioral-record-state", "behavioral-list-interventions", "behavioral-reevaluate-backlog", "behavioral-list-reevaluations", "behavioral-status",
         "procedural-health-check", "procedural-list-proposals", "procedural-upsert-activity", "procedural-list-activities",
         "procedural-run-audit", "procedural-list-audit-runs", "bootstrap-check"};
     return std::find(commands.begin(), commands.end(), value) != commands.end();
@@ -343,7 +345,8 @@ ApplicationExitCode execute_command(ApplicationRuntime& runtime,
                    << "optimization_proposal_count=" << procedural.value->optimization_proposal_count << '\n'
                    << "behavioral_state_snapshot_count=" << summary.value->behavioral_state_snapshot_count << '\n'
                    << "behavioral_backlog_count=" << summary.value->behavioral_backlog_count << '\n'
-                   << "behavioral_intervention_count=" << summary.value->behavioral_intervention_count << '\n';
+                   << "behavioral_intervention_count=" << summary.value->behavioral_intervention_count << '\n'
+                   << "behavioral_reevaluation_artifact_count=" << summary.value->behavioral_reevaluation_artifact_count << '\n';
             return complete(ApplicationExitCode::Success, "Status command completed.");
         }
         case ApplicationRunMode::ListModules: {
@@ -458,8 +461,30 @@ ApplicationExitCode execute_command(ApplicationRuntime& runtime,
             output << "behavioral_reevaluate_backlog=ok\n"
                    << "backlog_count=" << response.output_data.at("backlog_count") << '\n'
                    << "intervention_count=" << response.output_data.at("intervention_count") << '\n'
+                   << "reevaluation_artifact_id=" << response.output_data.at("reevaluation_artifact_id") << '\n'
+                   << "backlog_items_reordered=" << response.output_data.at("backlog_items_reordered") << '\n'
+                   << "interventions_created=" << response.output_data.at("interventions_created") << '\n'
+                   << "interventions_reconciled=" << response.output_data.at("interventions_reconciled") << '\n'
                    << "reevaluated_at=" << response.output_data.at("reevaluated_at") << '\n';
             return complete(ApplicationExitCode::Success, "Behavioral reevaluate backlog completed.");
+        }
+        case ApplicationRunMode::BehavioralListReevaluations: {
+            const auto reevaluations = runtime.memory_service.list_behavioral_reevaluation_artifacts();
+            if (!reevaluations.ok) {
+                error << "behavioral_list_reevaluations=failed\nmessage=" << reevaluations.message << '\n';
+                return complete(ApplicationExitCode::RuntimeOperationFailure, reevaluations.message);
+            }
+            output << "behavioral_list_reevaluations=ok\n"
+                   << "reevaluation_artifact_count=" << reevaluations.value->size() << '\n';
+            for (const auto& item : *reevaluations.value) {
+                emit_ordered_kv_block(output, {{"reevaluation_artifact_id", item.behavioral_reevaluation_id},
+                                               {"reevaluated_at", item.reevaluated_at.empty() ? "none" : item.reevaluated_at},
+                                               {"backlog_count", std::to_string(item.backlog_count)},
+                                               {"intervention_count", std::to_string(item.intervention_count)},
+                                               {"source_state_snapshot_id", item.source_state_snapshot_id.empty() ? "none" : item.source_state_snapshot_id},
+                                               {"notes_or_rationale", item.notes_or_rationale.empty() ? "none" : item.notes_or_rationale}});
+            }
+            return complete(ApplicationExitCode::Success, "Behavioral list reevaluations completed.");
         }
         case ApplicationRunMode::BehavioralStatus: {
             const auto summary = runtime.memory_service.get_behavioral_memory_summary();
@@ -481,6 +506,7 @@ ApplicationExitCode execute_command(ApplicationRuntime& runtime,
                    << "state_snapshot_count=" << summary.value->state_snapshot_count << '\n'
                    << "backlog_count=" << summary.value->backlog_count << '\n'
                    << "intervention_count=" << summary.value->intervention_count << '\n'
+                   << "reevaluation_artifact_count=" << summary.value->reevaluation_count << '\n'
                    << "approved_count=" << approved << '\n'
                    << "deferred_count=" << deferred << '\n'
                    << "rejected_count=" << rejected << '\n';

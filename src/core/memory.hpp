@@ -227,6 +227,7 @@ struct MemorySummary {
     std::size_t behavioral_decision_count;
     std::size_t behavioral_backlog_count;
     std::size_t behavioral_intervention_count;
+    std::size_t behavioral_reevaluation_artifact_count;
     std::size_t activity_inventory_count;
     std::size_t procedural_audit_run_count;
     std::size_t optimization_proposal_count;
