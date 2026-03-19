@@ -129,10 +129,14 @@ core::StringMap parse_attributes_json(const std::string& raw) {
     return result;
 }
 
+void emit_ordered_kv_block(std::ostream& output, const std::vector<std::pair<std::string, std::string>>& fields) {
+    for (const auto& [key, value] : fields) output << key << '=' << value << '\n';
+}
+
 void emit_kv_block(std::ostream& output, const core::StringMap& fields) {
     std::vector<std::pair<std::string, std::string>> ordered(fields.begin(), fields.end());
     std::sort(ordered.begin(), ordered.end());
-    for (const auto& [key, value] : ordered) output << key << '=' << value << '\n';
+    emit_ordered_kv_block(output, ordered);
 }
 
 }  // namespace
@@ -383,11 +387,20 @@ ApplicationExitCode execute_command(ApplicationRuntime& runtime,
             output << "procedural_list_proposals=ok\n"
                    << "proposal_count=" << proposals.value->size() << '\n';
             for (const auto& proposal : *proposals.value) {
-                emit_kv_block(output, {{"proposal_id", proposal.optimization_proposal_id},
-                                       {"triage_status", proposal.triage_status},
-                                       {"automation_feasibility", core::to_string(proposal.automation_feasibility)},
-                                       {"risk_tier", proposal.risk_tier},
-                                       {"time_recovery_minutes", std::to_string(proposal.time_recovery_minutes)}});
+                emit_ordered_kv_block(output, {{"proposal_id", proposal.optimization_proposal_id},
+                                               {"source_audit_run_id", proposal.source_audit_run_id},
+                                               {"opportunity_type", core::to_string(proposal.opportunity_type)},
+                                               {"effort_value_classification", core::to_string(proposal.effort_value_classification)},
+                                               {"triage_status", proposal.triage_status},
+                                               {"risk_tier", proposal.risk_tier},
+                                               {"automation_feasibility", core::to_string(proposal.automation_feasibility)},
+                                               {"reliability_estimate", std::to_string(proposal.reliability_estimate)},
+                                               {"time_recovery_minutes", std::to_string(proposal.time_recovery_minutes)},
+                                               {"cognitive_recovery_score", std::to_string(proposal.cognitive_recovery_score)},
+                                               {"stress_recovery_score", std::to_string(proposal.stress_recovery_score)},
+                                               {"financial_cost_estimate", std::to_string(proposal.financial_cost_estimate)},
+                                               {"marginal_benefit_score", std::to_string(proposal.marginal_benefit_score)},
+                                               {"diminishing_return_flag", proposal.diminishing_return_flag ? "true" : "false"}});
             }
             return complete(ApplicationExitCode::Success, "Procedural list proposals completed.");
         }

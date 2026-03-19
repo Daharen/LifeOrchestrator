@@ -11,6 +11,7 @@
 #include <iostream>
 #include <sstream>
 #include <stdexcept>
+#include <vector>
 
 namespace {
 
@@ -57,6 +58,16 @@ life_orchestrator::core::ActionResponse dispatch(Harness& harness,
 void record_high_capacity(Harness& harness, const std::string& captured_at = "2026-03-18T10:00:00.000Z") {
     auto response = dispatch(harness, "state.high", "behavioral.record_state", {{"behavioral_state_snapshot_id", "state.high"}, {"captured_at", captured_at}, {"active_intervention_count", "0"}, {"backlog_count", "0"}, {"schedule_density_score", "0.2"}, {"recent_compliance_rate", "0.9"}, {"recent_failure_frequency", "0.1"}, {"fatigue_score", "0.2"}, {"stress_score", "0.2"}, {"decision_time", captured_at}});
     assert_true(response.status == life_orchestrator::core::ExecutionStatus::Succeeded, "high capacity state should succeed");
+}
+
+
+void assert_in_order(const std::string& text, const std::vector<std::string>& fragments, const std::string& message) {
+    std::size_t cursor = 0;
+    for (const auto& fragment : fragments) {
+        const auto pos = text.find(fragment, cursor);
+        if (pos == std::string::npos) throw std::runtime_error(message + ": missing " + fragment);
+        cursor = pos + fragment.size();
+    }
 }
 
 void test_behavioral_application_commands_and_modules() {
@@ -177,8 +188,23 @@ void test_procedural_application_commands() {
     rc = life_orchestrator::app::run_application({"procedural-list-proposals", "--data-root=" + root.string(), "--quiet-startup"}, proposal_out, proposal_err, "", std::filesystem::current_path());
     assert_true(rc == 0, "procedural-list-proposals should succeed");
     const auto proposal_text = proposal_out.str();
+    assert_true(proposal_text.find("proposal_id=") != std::string::npos, "proposal list should expose proposal ids");
+    assert_true(proposal_text.find("source_audit_run_id=") != std::string::npos, "proposal list should expose source audit lineage");
+    assert_true(proposal_text.find("opportunity_type=") != std::string::npos, "proposal list should expose opportunity typing");
+    assert_true(proposal_text.find("effort_value_classification=") != std::string::npos, "proposal list should expose effort/value classification");
+    assert_true(proposal_text.find("triage_status=") != std::string::npos, "proposal list should expose triage status");
+    assert_true(proposal_text.find("risk_tier=") != std::string::npos, "proposal list should expose risk metadata");
     assert_true(proposal_text.find("automation_feasibility=") != std::string::npos, "proposal list should expose feasibility metadata");
+    assert_true(proposal_text.find("reliability_estimate=") != std::string::npos, "proposal list should expose reliability metadata");
     assert_true(proposal_text.find("time_recovery_minutes=") != std::string::npos, "proposal list should expose recovery metadata");
+    assert_true(proposal_text.find("cognitive_recovery_score=") != std::string::npos, "proposal list should expose cognitive recovery metadata");
+    assert_true(proposal_text.find("stress_recovery_score=") != std::string::npos, "proposal list should expose stress recovery metadata");
+    assert_true(proposal_text.find("financial_cost_estimate=") != std::string::npos, "proposal list should expose financial cost metadata");
+    assert_true(proposal_text.find("marginal_benefit_score=") != std::string::npos, "proposal list should expose marginal benefit metadata");
+    assert_true(proposal_text.find("diminishing_return_flag=") != std::string::npos, "proposal list should expose diminishing return metadata");
+    assert_in_order(proposal_text,
+                    {"proposal_id=", "source_audit_run_id=", "opportunity_type=", "effort_value_classification=", "triage_status=", "risk_tier=", "automation_feasibility=", "reliability_estimate=", "time_recovery_minutes=", "cognitive_recovery_score=", "stress_recovery_score=", "financial_cost_estimate=", "marginal_benefit_score=", "diminishing_return_flag="},
+                    "proposal list should emit required fields in stable order");
 
     std::ostringstream runs_out;
     std::ostringstream runs_err;
@@ -196,6 +222,87 @@ void test_procedural_application_commands() {
     assert_true(status_text.find("activity_inventory_count=2") != std::string::npos, "status should expose activity inventory count");
     assert_true(status_text.find("procedural_audit_run_count=1") != std::string::npos, "status should expose procedural audit run count");
     assert_true(status_text.find("optimization_proposal_count=2") != std::string::npos, "status should expose optimization proposal count");
+}
+
+
+void test_procedural_proposal_backward_compatibility_defaults() {
+    const std::filesystem::path root = "artifacts/procedural_backward_compat";
+    std::filesystem::remove_all(root);
+    std::filesystem::create_directories(root / "memory" / "procedural_auditing");
+    {
+        std::ofstream out(root / "memory" / "procedural_auditing" / "optimization_proposals.ndjson");
+        assert_true(out.is_open(), "legacy optimization proposals file should open");
+        out << "optimization_proposal_id=proposal.legacy;procedural_audit_run_id=audit.legacy;activity_inventory_item_id=activity.legacy;opportunity_type=Automation;effort_value_classification=HighEffortLowValue;recovered_minutes_per_week=30;recovered_effort_points=12;confidence_label=medium;title=Legacy proposal;rationale=Legacy record;source_module_id=tests;created_at=2026-03-18T09:00:00.000Z;updated_at=2026-03-18T09:00:00.000Z;version=1;attributes=domain_source\\=ops\n";
+    }
+
+    life_orchestrator::control_plane::EventLogger logger{"artifacts/events/procedural_backward_compat.ndjson"};
+    std::filesystem::remove(logger.log_path());
+    life_orchestrator::core::FileMemoryStore store{root, &logger};
+    assert_true(store.load_from_disk().ok, "legacy proposal load should succeed");
+    auto proposals = store.list_optimization_proposal_records();
+    assert_true(proposals.ok && proposals.value->size() == 1, "legacy proposal should reload");
+    const auto& proposal = proposals.value->front();
+    assert_true(proposal.source_audit_run_id == "audit.legacy", "legacy proposal should default source audit lineage to procedural audit run id");
+    assert_true(proposal.automation_feasibility == life_orchestrator::core::AutomationFeasibility::NotApplicable, "legacy proposal should default automation feasibility");
+    assert_true(proposal.reliability_estimate == 0.0, "legacy proposal should default reliability estimate");
+    assert_true(proposal.financial_cost_estimate == 0, "legacy proposal should default financial cost estimate");
+    assert_true(!proposal.diminishing_return_flag, "legacy proposal should default diminishing return flag to false");
+
+    std::ostringstream proposal_out;
+    std::ostringstream proposal_err;
+    auto rc = life_orchestrator::app::run_application({"procedural-list-proposals", "--data-root=" + root.string(), "--quiet-startup"}, proposal_out, proposal_err, "", std::filesystem::current_path());
+    assert_true(rc == 0, "procedural-list-proposals should succeed for legacy proposal data");
+    const auto proposal_text = proposal_out.str();
+    assert_true(proposal_text.find("source_audit_run_id=audit.legacy") != std::string::npos, "legacy source audit default should be emitted");
+    assert_true(proposal_text.find("automation_feasibility=NotApplicable") != std::string::npos, "legacy automation default should be emitted");
+    assert_true(proposal_text.find("reliability_estimate=0.000000") != std::string::npos, "legacy reliability default should be emitted");
+    assert_true(proposal_text.find("financial_cost_estimate=0") != std::string::npos, "legacy financial cost default should be emitted");
+    assert_true(proposal_text.find("diminishing_return_flag=false") != std::string::npos, "legacy diminishing return default should be emitted");
+}
+
+void test_procedural_list_proposals_emits_default_values() {
+    Harness harness{"procedural_default_emission"};
+    assert_true(harness.memory_service.upsert_optimization_proposal_record({"proposal.default",
+                                                                            "audit.default",
+                                                                            "activity.default",
+                                                                            life_orchestrator::core::OptimizationOpportunityType::Simplification,
+                                                                            life_orchestrator::core::EffortValueClassification::LowEffortLowValue,
+                                                                            {0, 0, "low"},
+                                                                            "Default proposal",
+                                                                            "Defaults should remain visible.",
+                                                                            "tests",
+                                                                            "2026-03-18T09:00:00.000Z",
+                                                                            "2026-03-18T09:00:00.000Z",
+                                                                            1,
+                                                                            "",
+                                                                            "Pending",
+                                                                            "",
+                                                                            life_orchestrator::core::AutomationFeasibility::NotApplicable,
+                                                                            "Unknown",
+                                                                            0.0,
+                                                                            0,
+                                                                            0,
+                                                                            0,
+                                                                            0,
+                                                                            0,
+                                                                            false,
+                                                                            "audit.default",
+                                                                            {}}).ok,
+                "default proposal upsert should succeed");
+    assert_true(harness.store.persist_to_disk().ok, "default proposal persist should succeed");
+
+    std::ostringstream proposal_out;
+    std::ostringstream proposal_err;
+    auto rc = life_orchestrator::app::run_application({"procedural-list-proposals", "--data-root=" + harness.root.string(), "--quiet-startup"}, proposal_out, proposal_err, "", std::filesystem::current_path());
+    assert_true(rc == 0, "procedural-list-proposals should succeed for default-valued proposal");
+    const auto proposal_text = proposal_out.str();
+    assert_true(proposal_text.find("proposal_id=proposal.default") != std::string::npos, "default-valued proposal id should be emitted");
+    assert_true(proposal_text.find("source_audit_run_id=audit.default") != std::string::npos, "default-valued source audit should be emitted");
+    assert_true(proposal_text.find("automation_feasibility=NotApplicable") != std::string::npos, "default automation value should be emitted");
+    assert_true(proposal_text.find("reliability_estimate=0.000000") != std::string::npos, "default reliability value should be emitted");
+    assert_true(proposal_text.find("time_recovery_minutes=0") != std::string::npos, "default time recovery should be emitted");
+    assert_true(proposal_text.find("financial_cost_estimate=0") != std::string::npos, "default financial cost should be emitted");
+    assert_true(proposal_text.find("diminishing_return_flag=false") != std::string::npos, "default diminishing return flag should be emitted");
 }
 
 void test_runtime_hygiene_ignore_file() {
@@ -216,6 +323,8 @@ int main() {
         test_effort_value_classification();
         test_procedural_audit_generation_and_behavioral_routing();
         test_procedural_application_commands();
+        test_procedural_proposal_backward_compatibility_defaults();
+        test_procedural_list_proposals_emits_default_values();
         test_runtime_hygiene_ignore_file();
     } catch (const std::exception& e) {
         std::cerr << "Test failure: " << e.what() << '\n';
