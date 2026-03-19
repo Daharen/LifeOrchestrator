@@ -347,6 +347,9 @@ void test_behavioral_cli_operational_surface() {
     std::ostringstream backlog_err;
     rc = life_orchestrator::app::run_application({"behavioral-list-backlog", "--data-root=" + root.string(), "--quiet-startup"}, backlog_out, backlog_err, "", std::filesystem::current_path());
     assert_true(rc == 0, "behavioral-list-backlog should succeed");
+    const auto backlog_text = backlog_out.str();
+    assert_true(backlog_text.find("behavioral_list_backlog=ok") != std::string::npos, "behavioral-list-backlog should emit deterministic status");
+    assert_true(backlog_text.find("backlog_count=") != std::string::npos, "behavioral-list-backlog should emit backlog counts");
 
     std::ostringstream reevaluate_out;
     std::ostringstream reevaluate_err;
@@ -354,7 +357,22 @@ void test_behavioral_cli_operational_surface() {
     assert_true(rc == 0, "behavioral-reevaluate-backlog should succeed");
     const auto reevaluate_text = reevaluate_out.str();
     assert_true(reevaluate_text.find("behavioral_reevaluate_backlog=ok") != std::string::npos, "reevaluate backlog should emit ok");
+    assert_true(reevaluate_text.find("backlog_count=0") != std::string::npos, "reevaluate backlog should expose persisted post-reevaluation backlog count");
+    assert_true(reevaluate_text.find("intervention_count=1") != std::string::npos, "reevaluate backlog should expose persisted post-reevaluation intervention count");
+    assert_true(reevaluate_text.find("reevaluation_artifact_id=reevaluation.backlog.2026-03-19T10:00:00.000Z") != std::string::npos, "reevaluate backlog should expose artifact id");
     assert_true(reevaluate_text.find("reevaluated_at=2026-03-19T10:00:00.000Z") != std::string::npos, "reevaluate backlog should preserve deterministic timestamp");
+
+    std::ostringstream reevaluations_out;
+    std::ostringstream reevaluations_err;
+    rc = life_orchestrator::app::run_application({"behavioral-list-reevaluations", "--data-root=" + root.string(), "--quiet-startup"}, reevaluations_out, reevaluations_err, "", std::filesystem::current_path());
+    assert_true(rc == 0, "behavioral-list-reevaluations should succeed");
+    const auto reevaluations_text = reevaluations_out.str();
+    assert_true(reevaluations_text.find("behavioral_list_reevaluations=ok") != std::string::npos, "behavioral-list-reevaluations should emit deterministic status");
+    assert_true(reevaluations_text.find("reevaluation_artifact_count=1") != std::string::npos, "behavioral-list-reevaluations should expose artifact counts");
+    assert_true(reevaluations_text.find("reevaluation_artifact_id=reevaluation.backlog.2026-03-19T10:00:00.000Z") != std::string::npos, "behavioral-list-reevaluations should expose reevaluation ids");
+    assert_true(reevaluations_text.find("source_state_snapshot_id=state.2026-03-19T09:00:00.000Z.8.2.3.7.8") != std::string::npos, "behavioral-list-reevaluations should expose source state lineage");
+    assert_true(reevaluations_text.find("notes_or_rationale=") != std::string::npos, "behavioral-list-reevaluations should expose notes");
+    assert_in_order(reevaluations_text, {"reevaluation_artifact_id=", "reevaluated_at=", "backlog_count=", "intervention_count=", "source_state_snapshot_id=", "notes_or_rationale="}, "behavioral-list-reevaluations should emit stable fields");
 
     std::ostringstream status_out;
     std::ostringstream status_err;
@@ -364,6 +382,7 @@ void test_behavioral_cli_operational_surface() {
     assert_true(status_text.find("behavioral_status=ok") != std::string::npos, "behavioral-status should emit ok");
     assert_true(status_text.find("state_snapshot_count=1") != std::string::npos, "behavioral-status should deduplicate identical state snapshots");
     assert_true(status_text.find("intervention_count=") != std::string::npos, "behavioral-status should emit intervention counts");
+    assert_true(status_text.find("reevaluation_artifact_count=1") != std::string::npos, "behavioral-status should emit reevaluation artifact counts");
 
     std::ostringstream general_status_out;
     std::ostringstream general_status_err;
@@ -373,6 +392,7 @@ void test_behavioral_cli_operational_surface() {
     assert_true(general_status_text.find("behavioral_state_snapshot_count=1") != std::string::npos, "general status should expose behavioral state snapshot count");
     assert_true(general_status_text.find("behavioral_backlog_count=") != std::string::npos, "general status should expose behavioral backlog count");
     assert_true(general_status_text.find("behavioral_intervention_count=") != std::string::npos, "general status should expose behavioral intervention count");
+    assert_true(general_status_text.find("behavioral_reevaluation_artifact_count=1") != std::string::npos, "general status should expose behavioral reevaluation artifact count");
 
     life_orchestrator::control_plane::EventLogger logger{"artifacts/events/app_behavioral_ops_reload.ndjson"};
     std::filesystem::remove(logger.log_path());
@@ -380,6 +400,79 @@ void test_behavioral_cli_operational_surface() {
     assert_true(store.load_from_disk().ok, "behavioral CLI reload should succeed");
     auto summary = store.get_behavioral_memory_summary();
     assert_true(summary.ok && summary.value->state_snapshot_count == 1, "identical behavioral state reruns should reconcile deterministically");
+}
+
+void test_behavioral_backlog_and_reevaluation_visibility_defaults() {
+    Harness harness{"behavioral_visibility"};
+    assert_true(harness.memory_service.append_behavioral_proposal({"proposal.backlog",
+                                                                   life_orchestrator::core::BehavioralProposalType::Reminder,
+                                                                   "Backlog item",
+                                                                   "Visible lineage defaults.",
+                                                                   "tests",
+                                                                   {},
+                                                                   life_orchestrator::core::BehavioralPriority::Normal,
+                                                                   5.0,
+                                                                   4.0,
+                                                                   15,
+                                                                   life_orchestrator::core::InterventionPresentationMode::SuggestivePrompt,
+                                                                   std::nullopt,
+                                                                   std::nullopt,
+                                                                   "2026-03-19T08:00:00.000Z",
+                                                                   "2026-03-19T08:00:00.000Z",
+                                                                   1,
+                                                                   {}}).ok,
+                "behavioral proposal append should succeed");
+    assert_true(harness.memory_service.upsert_behavioral_backlog_item({"backlog.visible",
+                                                                       "proposal.backlog",
+                                                                       life_orchestrator::core::BacklogStatus::Pending,
+                                                                       "Awaiting capacity",
+                                                                       "2026-03-19T08:00:00.000Z",
+                                                                       std::nullopt,
+                                                                       std::nullopt,
+                                                                       "tests",
+                                                                       1,
+                                                                       "none",
+                                                                       "none",
+                                                                       "none",
+                                                                       "",
+                                                                       "",
+                                                                       ""}).ok,
+                "behavioral backlog upsert should succeed");
+    assert_true(harness.memory_service.append_behavioral_reevaluation_artifact({"reevaluation.manual",
+                                                                                 "2026-03-19T11:00:00.000Z",
+                                                                                 "tests",
+                                                                                 1,
+                                                                                 0,
+                                                                                 "none",
+                                                                                 "none",
+                                                                                 {"backlog.visible"},
+                                                                                 {},
+                                                                                 1}).ok,
+                "behavioral reevaluation artifact append should succeed");
+    assert_true(harness.store.persist_to_disk().ok, "behavioral visibility persist should succeed");
+
+    std::ostringstream backlog_out;
+    std::ostringstream backlog_err;
+    auto rc = life_orchestrator::app::run_application({"behavioral-list-backlog", "--data-root=" + harness.root.string(), "--quiet-startup"}, backlog_out, backlog_err, "", std::filesystem::current_path());
+    assert_true(rc == 0, "behavioral-list-backlog should succeed for non-empty backlog visibility");
+    const auto backlog_text = backlog_out.str();
+    assert_true(backlog_text.find("backlog_count=1") != std::string::npos, "behavioral-list-backlog should expose non-empty backlog counts");
+    assert_true(backlog_text.find("source_proposal_id=none") != std::string::npos, "behavioral-list-backlog should emit default proposal lineage");
+    assert_true(backlog_text.find("source_audit_run_id=none") != std::string::npos, "behavioral-list-backlog should emit default audit lineage");
+    assert_true(backlog_text.find("source_activity_id=none") != std::string::npos, "behavioral-list-backlog should emit default activity lineage");
+    assert_true(backlog_text.find("priority=Normal") != std::string::npos, "behavioral-list-backlog should emit default priority");
+    assert_true(backlog_text.find("effort_estimate=0") != std::string::npos, "behavioral-list-backlog should emit default effort");
+    assert_true(backlog_text.find("rationale=none") != std::string::npos, "behavioral-list-backlog should emit default rationale");
+    assert_in_order(backlog_text, {"item_id=", "source_proposal_id=", "source_audit_run_id=", "source_activity_id=", "priority=", "status=", "effort_estimate=", "rationale="}, "behavioral-list-backlog should emit stable lineage defaults");
+
+    std::ostringstream reevaluations_out;
+    std::ostringstream reevaluations_err;
+    rc = life_orchestrator::app::run_application({"behavioral-list-reevaluations", "--data-root=" + harness.root.string(), "--quiet-startup"}, reevaluations_out, reevaluations_err, "", std::filesystem::current_path());
+    assert_true(rc == 0, "behavioral-list-reevaluations should succeed for default-valued artifact");
+    const auto reevaluations_text = reevaluations_out.str();
+    assert_true(reevaluations_text.find("reevaluation_artifact_id=reevaluation.manual") != std::string::npos, "behavioral-list-reevaluations should expose persisted artifact ids");
+    assert_true(reevaluations_text.find("source_state_snapshot_id=none") != std::string::npos, "behavioral-list-reevaluations should emit default source state lineage");
+    assert_true(reevaluations_text.find("notes_or_rationale=none") != std::string::npos, "behavioral-list-reevaluations should emit default notes");
 }
 
 void test_runtime_hygiene_ignore_file() {
@@ -403,6 +496,7 @@ int main() {
         test_procedural_proposal_backward_compatibility_defaults();
         test_procedural_list_proposals_emits_default_values();
         test_behavioral_cli_operational_surface();
+        test_behavioral_backlog_and_reevaluation_visibility_defaults();
         test_runtime_hygiene_ignore_file();
     } catch (const std::exception& e) {
         std::cerr << "Test failure: " << e.what() << '\n';

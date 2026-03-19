@@ -139,6 +139,8 @@ struct BehavioralReevaluationArtifact {
     std::string source_module_id;
     std::size_t backlog_count;
     std::size_t intervention_count;
+    std::string source_state_snapshot_id;
+    std::string notes_or_rationale;
     std::vector<BacklogItemId> reevaluated_backlog_item_ids;
     std::vector<InterventionId> intervention_ids;
     std::uint64_t version;

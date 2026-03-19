@@ -162,6 +162,7 @@ core::ActionResponse BehavioralTriageModule::reevaluate_backlog(const core::Acti
     std::vector<core::BehavioralProposal> eligible;
     const auto now = param(request, "decision_time", core::current_timestamp_utc());
     std::vector<core::BacklogItemId> reevaluated_ids;
+    std::size_t backlog_items_reordered = 0;
     for (const auto& item : *backlog.value) {
         if (item.reconsider_after && *item.reconsider_after > now) continue;
         auto proposal = memory_service_->get_behavioral_proposal_by_id(item.behavioral_proposal_id);
@@ -188,22 +189,32 @@ core::ActionResponse BehavioralTriageModule::reevaluate_backlog(const core::Acti
                 updated.status = core::BacklogStatus::Reconsidered;
             }
             memory_service_->upsert_behavioral_backlog_item(updated);
+            ++backlog_items_reordered;
         }
         if (item.intervention) {
             memory_service_->append_behavioral_intervention(*item.intervention);
             intervention_ids.push_back(item.intervention->intervention_id);
         }
     }
-    core::BehavioralReevaluationArtifact artifact{"reevaluation.backlog",
+    const auto summary = memory_service_->get_behavioral_memory_summary();
+    if (!summary.ok) return {request.request_id, core::ExecutionStatus::Failed, descriptor_.module_id, summary.message, {}, core::current_timestamp_utc()};
+    const auto reevaluation_artifact_id = "reevaluation.backlog." + now;
+    const auto source_state_snapshot_id = snapshots.ok && snapshots.value && !snapshots.value->empty() ? snapshots.value->front().behavioral_state_snapshot_id : std::string{"none"};
+    const auto notes_or_rationale = "eligible=" + std::to_string(eligible.size()) + ";promoted=" + std::to_string(promoted) + ";reordered=" + std::to_string(backlog_items_reordered) + ";created=" + std::to_string(intervention_ids.size());
+    core::BehavioralReevaluationArtifact artifact{reevaluation_artifact_id,
                                                   now,
                                                   descriptor_.module_id,
-                                                  backlog.value->size(),
-                                                  intervention_ids.size(),
+                                                  summary.value->backlog_count,
+                                                  summary.value->intervention_count,
+                                                  source_state_snapshot_id,
+                                                  notes_or_rationale,
                                                   reevaluated_ids,
                                                   intervention_ids,
                                                   1};
     memory_service_->append_behavioral_reevaluation_artifact(artifact);
-    return {request.request_id, core::ExecutionStatus::Succeeded, descriptor_.module_id, "Behavioral backlog reevaluated.", {{"eligible_count", std::to_string(eligible.size())}, {"promoted_count", std::to_string(promoted)}, {"backlog_count", std::to_string(backlog.value->size())}, {"intervention_count", std::to_string(intervention_ids.size())}, {"reevaluated_at", now}}, core::current_timestamp_utc()};
+    const auto post_summary = memory_service_->get_behavioral_memory_summary();
+    if (!post_summary.ok) return {request.request_id, core::ExecutionStatus::Failed, descriptor_.module_id, post_summary.message, {}, core::current_timestamp_utc()};
+    return {request.request_id, core::ExecutionStatus::Succeeded, descriptor_.module_id, "Behavioral backlog reevaluated.", {{"eligible_count", std::to_string(eligible.size())}, {"promoted_count", std::to_string(promoted)}, {"backlog_count", std::to_string(post_summary.value->backlog_count)}, {"intervention_count", std::to_string(post_summary.value->intervention_count)}, {"reevaluation_artifact_id", reevaluation_artifact_id}, {"backlog_items_reordered", std::to_string(backlog_items_reordered)}, {"interventions_created", std::to_string(intervention_ids.size())}, {"interventions_reconciled", std::to_string(post_summary.value->intervention_count)}, {"reevaluated_at", now}}, core::current_timestamp_utc()};
 }
 
 core::ActionResponse BehavioralTriageModule::list_next_interventions(const core::ActionRequest& request) {
