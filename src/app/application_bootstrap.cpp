@@ -31,6 +31,10 @@ ApplicationRunMode parse_run_mode(const std::string& value) {
     if (value == "schedule-health-check") return ApplicationRunMode::ScheduleHealthCheck;
     if (value == "behavioral-health-check") return ApplicationRunMode::BehavioralHealthCheck;
     if (value == "behavioral-list-backlog") return ApplicationRunMode::BehavioralListBacklog;
+    if (value == "behavioral-record-state") return ApplicationRunMode::BehavioralRecordState;
+    if (value == "behavioral-list-interventions") return ApplicationRunMode::BehavioralListInterventions;
+    if (value == "behavioral-reevaluate-backlog") return ApplicationRunMode::BehavioralReevaluateBacklog;
+    if (value == "behavioral-status") return ApplicationRunMode::BehavioralStatus;
     if (value == "procedural-health-check") return ApplicationRunMode::ProceduralHealthCheck;
     if (value == "procedural-list-proposals") return ApplicationRunMode::ProceduralListProposals;
     if (value == "procedural-upsert-activity") return ApplicationRunMode::ProceduralUpsertActivity;
@@ -47,6 +51,10 @@ std::string run_mode_name(ApplicationRunMode mode) {
         case ApplicationRunMode::ScheduleHealthCheck: return "schedule-health-check";
         case ApplicationRunMode::BehavioralHealthCheck: return "behavioral-health-check";
         case ApplicationRunMode::BehavioralListBacklog: return "behavioral-list-backlog";
+        case ApplicationRunMode::BehavioralRecordState: return "behavioral-record-state";
+        case ApplicationRunMode::BehavioralListInterventions: return "behavioral-list-interventions";
+        case ApplicationRunMode::BehavioralReevaluateBacklog: return "behavioral-reevaluate-backlog";
+        case ApplicationRunMode::BehavioralStatus: return "behavioral-status";
         case ApplicationRunMode::ProceduralHealthCheck: return "procedural-health-check";
         case ApplicationRunMode::ProceduralListProposals: return "procedural-list-proposals";
         case ApplicationRunMode::ProceduralUpsertActivity: return "procedural-upsert-activity";
@@ -69,7 +77,7 @@ std::string value_after_equals(const std::string& arg) {
 
 bool is_command_name(const std::string& value) {
     static const std::vector<std::string> commands = {
-        "status", "list-modules", "schedule-health-check", "behavioral-health-check", "behavioral-list-backlog",
+        "status", "list-modules", "schedule-health-check", "behavioral-health-check", "behavioral-list-backlog", "behavioral-record-state", "behavioral-list-interventions", "behavioral-reevaluate-backlog", "behavioral-status",
         "procedural-health-check", "procedural-list-proposals", "procedural-upsert-activity", "procedural-list-activities",
         "procedural-run-audit", "procedural-list-audit-runs", "bootstrap-check"};
     return std::find(commands.begin(), commands.end(), value) != commands.end();
@@ -87,6 +95,12 @@ bool is_allowed_command_option(ApplicationRunMode mode, const std::string& key) 
     if (mode == ApplicationRunMode::ProceduralRunAudit) {
         return key == "now" || key == "audit-run-id";
     }
+    if (mode == ApplicationRunMode::BehavioralRecordState) {
+        static const std::vector<std::string> keys = {"available-capacity", "stress-level", "cognitive-load", "motivation", "recovery-status", "sleep-quality", "time-pressure", "notes", "now", "attributes-json"};
+        return std::find(keys.begin(), keys.end(), key) != keys.end();
+    }
+    if (mode == ApplicationRunMode::BehavioralListInterventions) return key == "status" || key == "due-by" || key == "now";
+    if (mode == ApplicationRunMode::BehavioralReevaluateBacklog) return key == "now";
     return key == "now";
 }
 
@@ -100,6 +114,13 @@ std::string normalize_command_option_key(const std::string& key) {
     if (key == "stress-load") return "stress_load";
     if (key == "financial-cost") return "financial_cost";
     if (key == "audit-run-id") return "procedural_audit_run_id";
+    if (key == "available-capacity") return "available_capacity";
+    if (key == "stress-level") return "stress_level";
+    if (key == "cognitive-load") return "cognitive_load";
+    if (key == "recovery-status") return "recovery_status";
+    if (key == "sleep-quality") return "sleep_quality";
+    if (key == "time-pressure") return "time_pressure";
+    if (key == "due-by") return "due_by";
     return key;
 }
 
@@ -319,7 +340,10 @@ ApplicationExitCode execute_command(ApplicationRuntime& runtime,
                    << "integration_record_count=" << runtime.integration_repository.list_all().size() << '\n'
                    << "activity_inventory_count=" << procedural.value->activity_inventory_count << '\n'
                    << "procedural_audit_run_count=" << procedural.value->audit_run_count << '\n'
-                   << "optimization_proposal_count=" << procedural.value->optimization_proposal_count << '\n';
+                   << "optimization_proposal_count=" << procedural.value->optimization_proposal_count << '\n'
+                   << "behavioral_state_snapshot_count=" << summary.value->behavioral_state_snapshot_count << '\n'
+                   << "behavioral_backlog_count=" << summary.value->behavioral_backlog_count << '\n'
+                   << "behavioral_intervention_count=" << summary.value->behavioral_intervention_count << '\n';
             return complete(ApplicationExitCode::Success, "Status command completed.");
         }
         case ApplicationRunMode::ListModules: {
@@ -354,15 +378,113 @@ ApplicationExitCode execute_command(ApplicationRuntime& runtime,
             return complete(ApplicationExitCode::Success, "Behavioral health check completed.");
         }
         case ApplicationRunMode::BehavioralListBacklog: {
-            const auto backlog = runtime.control_plane.dispatch({"app-behavior-list-backlog", "behavioral.list_backlog", "life_orchestrator_app", core::RiskTier::Suggestive, {}, core::current_timestamp_utc()});
-            if (backlog.status != core::ExecutionStatus::Succeeded) {
+            const auto backlog = runtime.memory_service.list_behavioral_backlog_items();
+            if (!backlog.ok) {
                 error << "behavioral_list_backlog=failed\nmessage=" << backlog.message << '\n';
                 return complete(ApplicationExitCode::RuntimeOperationFailure, backlog.message);
             }
             output << "behavioral_list_backlog=ok\n"
-                   << "backlog_count=" << backlog.output_data.at("backlog_count") << '\n'
-                   << "first_backlog_item_id=" << backlog.output_data.at("first_backlog_item_id") << '\n';
+                   << "backlog_count=" << backlog.value->size() << '\n';
+            for (const auto& item : *backlog.value) {
+                emit_ordered_kv_block(output, {{"item_id", item.backlog_item_id}, {"source_proposal_id", item.source_proposal_id.empty() ? "none" : item.source_proposal_id}, {"source_audit_run_id", item.source_audit_run_id.empty() ? "none" : item.source_audit_run_id}, {"source_activity_id", item.source_activity_id.empty() ? "none" : item.source_activity_id}, {"priority", item.priority.empty() ? "Normal" : item.priority}, {"status", core::to_string(item.status)}, {"effort_estimate", item.effort_estimate.empty() ? "0" : item.effort_estimate}, {"rationale", item.rationale.empty() ? "none" : item.rationale}});
+            }
             return complete(ApplicationExitCode::Success, "Behavioral backlog command completed.");
+        }
+        case ApplicationRunMode::BehavioralRecordState: {
+            static const std::vector<std::string> required = {"available_capacity", "stress_level", "cognitive_load", "motivation", "recovery_status"};
+            for (const auto& key : required) {
+                if (!runtime.config.command_parameters.contains(key) || runtime.config.command_parameters.at(key).empty()) {
+                    error << "behavioral_record_state=failed\nmessage=missing_" << key << '\n';
+                    return complete(ApplicationExitCode::CommandValidationFailure, "Missing required argument: " + key);
+                }
+            }
+            try {
+                for (const auto& [key, value] : parse_attributes_json(runtime.config.command_parameters.contains("attributes_json") ? runtime.config.command_parameters.at("attributes_json") : std::string{})) runtime.config.command_parameters["attribute." + key] = value;
+            } catch (const std::exception& e) {
+                error << "behavioral_record_state=failed\nmessage=" << e.what() << '\n';
+                return complete(ApplicationExitCode::CommandValidationFailure, e.what());
+            }
+            const auto now = runtime.config.command_parameters.contains("now") ? runtime.config.command_parameters.at("now") : core::current_timestamp_utc();
+            const double available = std::stod(runtime.config.command_parameters.at("available_capacity"));
+            const double stress = std::stod(runtime.config.command_parameters.at("stress_level"));
+            const double cognitive = std::stod(runtime.config.command_parameters.at("cognitive_load"));
+            const double motivation = std::stod(runtime.config.command_parameters.at("motivation"));
+            const double recovery = std::stod(runtime.config.command_parameters.at("recovery_status"));
+            const double sleep = runtime.config.command_parameters.contains("sleep_quality") ? std::stod(runtime.config.command_parameters.at("sleep_quality")) : recovery;
+            const double pressure = runtime.config.command_parameters.contains("time_pressure") ? std::stod(runtime.config.command_parameters.at("time_pressure")) : stress;
+            runtime.config.command_parameters["behavioral_state_snapshot_id"] = "state." + now + "." + runtime.config.command_parameters.at("available_capacity") + "." + runtime.config.command_parameters.at("stress_level") + "." + runtime.config.command_parameters.at("cognitive_load") + "." + runtime.config.command_parameters.at("motivation") + "." + runtime.config.command_parameters.at("recovery_status");
+            runtime.config.command_parameters["captured_at"] = now;
+            runtime.config.command_parameters["decision_time"] = now;
+            runtime.config.command_parameters["active_intervention_count"] = std::to_string(std::max(0, static_cast<int>(pressure + stress) - static_cast<int>(available)));
+            runtime.config.command_parameters["backlog_count"] = std::to_string(std::max(0, static_cast<int>(cognitive + pressure) - static_cast<int>(motivation)));
+            runtime.config.command_parameters["schedule_density_score"] = std::to_string(std::min(1.0, pressure / 10.0));
+            runtime.config.command_parameters["recent_compliance_rate"] = std::to_string(std::max(0.0, std::min(1.0, (motivation + recovery) / 20.0)));
+            runtime.config.command_parameters["recent_failure_frequency"] = std::to_string(std::max(0.0, std::min(1.0, (stress + cognitive) / 20.0)));
+            runtime.config.command_parameters["fatigue_score"] = std::to_string(std::max(0.0, std::min(1.0, 1.0 - (sleep / 10.0))));
+            runtime.config.command_parameters["stress_score"] = std::to_string(std::max(0.0, std::min(1.0, stress / 10.0)));
+            auto response = runtime.control_plane.dispatch({"app-behavioral-record-state", "behavioral.record_state", runtime.config.application_name, core::RiskTier::Suggestive, runtime.config.command_parameters, now});
+            if (response.status != core::ExecutionStatus::Succeeded) {
+                error << "behavioral_record_state=failed\nmessage=" << response.message << '\n';
+                return complete(ApplicationExitCode::RuntimeOperationFailure, response.message);
+            }
+            runtime.memory_store.persist_to_disk();
+            output << "behavioral_record_state=ok\n"
+                   << "snapshot_id=" << response.output_data.at("snapshot_id") << '\n'
+                   << "captured_at=" << now << '\n'
+                   << "capacity_level=" << response.output_data.at("capacity_level") << '\n';
+            return complete(ApplicationExitCode::Success, "Behavioral record state completed.");
+        }
+        case ApplicationRunMode::BehavioralListInterventions: {
+            const auto interventions = runtime.memory_service.list_behavioral_interventions(runtime.config.command_parameters.contains("status") ? runtime.config.command_parameters.at("status") : std::string{"Approved"}, runtime.config.command_parameters.contains("due_by") ? std::optional<core::TimestampString>(runtime.config.command_parameters.at("due_by")) : std::nullopt);
+            if (!interventions.ok) {
+                error << "behavioral_list_interventions=failed\nmessage=" << interventions.message << '\n';
+                return complete(ApplicationExitCode::RuntimeOperationFailure, interventions.message);
+            }
+            output << "behavioral_list_interventions=ok\n"
+                   << "intervention_count=" << interventions.value->size() << '\n';
+            for (const auto& item : *interventions.value) {
+                emit_ordered_kv_block(output, {{"item_id", item.intervention_id}, {"source_proposal_id", item.source_proposal_id.empty() ? "none" : item.source_proposal_id}, {"source_audit_run_id", item.source_audit_run_id.empty() ? "none" : item.source_audit_run_id}, {"source_activity_id", item.source_activity_id.empty() ? "none" : item.source_activity_id}, {"priority", item.priority.empty() ? "Normal" : item.priority}, {"status", item.status.empty() ? "none" : item.status}, {"effort_estimate", item.effort_estimate.empty() ? "0" : item.effort_estimate}, {"rationale", item.rationale.empty() ? "none" : item.rationale}});
+            }
+            return complete(ApplicationExitCode::Success, "Behavioral list interventions completed.");
+        }
+        case ApplicationRunMode::BehavioralReevaluateBacklog: {
+            const auto now = runtime.config.command_parameters.contains("now") ? runtime.config.command_parameters.at("now") : core::current_timestamp_utc();
+            const auto response = runtime.control_plane.dispatch({"app-behavioral-reevaluate", "behavioral.reevaluate_backlog", runtime.config.application_name, core::RiskTier::Suggestive, {{"decision_time", now}}, now});
+            if (response.status != core::ExecutionStatus::Succeeded) {
+                error << "behavioral_reevaluate_backlog=failed\nmessage=" << response.message << '\n';
+                return complete(ApplicationExitCode::RuntimeOperationFailure, response.message);
+            }
+            runtime.memory_store.persist_to_disk();
+            output << "behavioral_reevaluate_backlog=ok\n"
+                   << "backlog_count=" << response.output_data.at("backlog_count") << '\n'
+                   << "intervention_count=" << response.output_data.at("intervention_count") << '\n'
+                   << "reevaluated_at=" << response.output_data.at("reevaluated_at") << '\n';
+            return complete(ApplicationExitCode::Success, "Behavioral reevaluate backlog completed.");
+        }
+        case ApplicationRunMode::BehavioralStatus: {
+            const auto summary = runtime.memory_service.get_behavioral_memory_summary();
+            const auto interventions = runtime.memory_service.list_behavioral_interventions("", std::nullopt);
+            const auto backlog = runtime.memory_service.list_behavioral_backlog_items();
+            const auto decisions = runtime.memory_service.list_behavioral_proposals();
+            if (!summary.ok || !interventions.ok || !backlog.ok || !decisions.ok) {
+                error << "behavioral_status=failed\n";
+                return complete(ApplicationExitCode::RuntimeOperationFailure, "Behavioral status failed.");
+            }
+            std::size_t approved=0,deferred=0,rejected=0;
+            const auto all_decisions = runtime.memory_service.store().list_behavioral_reevaluation_artifacts();
+            (void)all_decisions;
+            auto recent = runtime.memory_service.store().list_behavioral_proposals();
+            (void)recent;
+            for (const auto& item : *interventions.value) if (item.status == "Approved") ++approved;
+            for (const auto& item : *backlog.value) { if (core::to_string(item.status) == "Rejected") ++rejected; else ++deferred; }
+            output << "behavioral_status=ok\n"
+                   << "state_snapshot_count=" << summary.value->state_snapshot_count << '\n'
+                   << "backlog_count=" << summary.value->backlog_count << '\n'
+                   << "intervention_count=" << summary.value->intervention_count << '\n'
+                   << "approved_count=" << approved << '\n'
+                   << "deferred_count=" << deferred << '\n'
+                   << "rejected_count=" << rejected << '\n';
+            return complete(ApplicationExitCode::Success, "Behavioral status completed.");
         }
         case ApplicationRunMode::ProceduralHealthCheck: {
             const auto state = runtime.control_plane.dispatch({"app-procedural-state", "behavioral.record_state", "life_orchestrator_app", core::RiskTier::Suggestive, {{"behavioral_state_snapshot_id", "state.procedural.health"}, {"captured_at", "2026-03-18T09:00:00.000Z"}, {"active_intervention_count", "0"}, {"backlog_count", "0"}, {"schedule_density_score", "0.2"}, {"recent_compliance_rate", "0.9"}, {"recent_failure_frequency", "0.1"}, {"fatigue_score", "0.2"}, {"stress_score", "0.2"}, {"decision_time", "2026-03-18T09:00:00.000Z"}}, "2026-03-18T09:00:00.000Z"});

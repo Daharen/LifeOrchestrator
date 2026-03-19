@@ -51,7 +51,8 @@ LO_BEHAVIOR_SWITCH(BehavioralOperationType, value,
     case BehavioralOperationType::TriageProposals: return "TriageProposals";
     case BehavioralOperationType::ListBacklog: return "ListBacklog";
     case BehavioralOperationType::ReevaluateBacklog: return "ReevaluateBacklog";
-    case BehavioralOperationType::ListNextInterventions: return "ListNextInterventions";)
+    case BehavioralOperationType::ListNextInterventions: return "ListNextInterventions";
+    case BehavioralOperationType::Status: return "Status";)
 
 BehavioralStateSnapshot default_behavioral_state_snapshot() {
     return {"behavioral-state.default",
@@ -67,7 +68,7 @@ BehavioralStateSnapshot default_behavioral_state_snapshot() {
             BehavioralCapacityLevel::Medium,
             PsychologicalStateLevel::Stable,
             "Default deterministic fallback snapshot.",
-            1};
+            1, {}};
 }
 
 BehavioralCapacityLevel derive_behavioral_capacity_level(const BehavioralStateSnapshot& snapshot) {
@@ -176,6 +177,7 @@ BehavioralOperationType behavioral_operation_type_from_string(const std::string&
     if (value == "ListBacklog") return BehavioralOperationType::ListBacklog;
     if (value == "ReevaluateBacklog") return BehavioralOperationType::ReevaluateBacklog;
     if (value == "ListNextInterventions") return BehavioralOperationType::ListNextInterventions;
+    if (value == "Status") return BehavioralOperationType::Status;
     return BehavioralOperationType::TriageProposals;
 }
 

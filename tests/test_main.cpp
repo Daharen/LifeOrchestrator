@@ -305,6 +305,83 @@ void test_procedural_list_proposals_emits_default_values() {
     assert_true(proposal_text.find("diminishing_return_flag=false") != std::string::npos, "default diminishing return flag should be emitted");
 }
 
+
+void test_behavioral_cli_operational_surface() {
+    const std::filesystem::path root = "artifacts/app_behavioral_ops";
+    std::filesystem::remove_all(root);
+
+    std::ostringstream record_out;
+    std::ostringstream record_err;
+    auto rc = life_orchestrator::app::run_application({"behavioral-record-state", "--data-root=" + root.string(), "--quiet-startup", "--available-capacity", "8", "--stress-level", "2", "--cognitive-load", "3", "--motivation", "7", "--recovery-status", "8", "--sleep-quality", "8", "--time-pressure", "2", "--notes", "steady", "--now", "2026-03-19T09:00:00.000Z", "--attributes-json", "{\"operator\":\"console\"}"}, record_out, record_err, "", std::filesystem::current_path());
+    assert_true(rc == 0, "behavioral-record-state should succeed");
+    assert_true(record_out.str().find("behavioral_record_state=ok") != std::string::npos, "behavioral record state output should be deterministic");
+
+    std::ostringstream record_repeat_out;
+    std::ostringstream record_repeat_err;
+    rc = life_orchestrator::app::run_application({"behavioral-record-state", "--data-root=" + root.string(), "--quiet-startup", "--available-capacity", "8", "--stress-level", "2", "--cognitive-load", "3", "--motivation", "7", "--recovery-status", "8", "--sleep-quality", "8", "--time-pressure", "2", "--notes", "steady", "--now", "2026-03-19T09:00:00.000Z", "--attributes-json", "{\"operator\":\"console\"}"}, record_repeat_out, record_repeat_err, "", std::filesystem::current_path());
+    assert_true(rc == 0, "duplicate behavioral-record-state should succeed");
+
+    std::ostringstream upsert_out;
+    std::ostringstream upsert_err;
+    rc = life_orchestrator::app::run_application({"procedural-upsert-activity", "--data-root=" + root.string(), "--quiet-startup", "--activity-id", "activity.ops", "--title", "Ops triage", "--domain-source", "operations", "--frequency", "daily", "--duration-minutes", "45", "--effort", "8", "--outcome-value", "3", "--repeatable", "1", "--now", "2026-03-19T09:00:00.000Z"}, upsert_out, upsert_err, "", std::filesystem::current_path());
+    assert_true(rc == 0, "procedural-upsert-activity should succeed for behavioral CLI test");
+
+    std::ostringstream audit_out;
+    std::ostringstream audit_err;
+    rc = life_orchestrator::app::run_application({"procedural-run-audit", "--data-root=" + root.string(), "--quiet-startup", "--now", "2026-03-19T09:00:00.000Z"}, audit_out, audit_err, "", std::filesystem::current_path());
+    assert_true(rc == 0, "procedural-run-audit should succeed for behavioral CLI test");
+
+    std::ostringstream interventions_out;
+    std::ostringstream interventions_err;
+    rc = life_orchestrator::app::run_application({"behavioral-list-interventions", "--data-root=" + root.string(), "--quiet-startup"}, interventions_out, interventions_err, "", std::filesystem::current_path());
+    assert_true(rc == 0, "behavioral-list-interventions should succeed");
+    const auto interventions_text = interventions_out.str();
+    assert_true(interventions_text.find("behavioral_list_interventions=ok") != std::string::npos, "behavioral-list-interventions should emit deterministic status");
+    assert_true(interventions_text.find("item_id=") != std::string::npos, "behavioral-list-interventions should emit item ids");
+    assert_true(interventions_text.find("source_proposal_id=proposal.") != std::string::npos, "behavioral interventions should expose source proposal lineage");
+    assert_true(interventions_text.find("source_audit_run_id=") != std::string::npos, "behavioral interventions should expose source audit lineage");
+    assert_true(interventions_text.find("source_activity_id=activity.ops") != std::string::npos, "behavioral interventions should expose source activity lineage");
+    assert_in_order(interventions_text, {"item_id=", "source_proposal_id=", "source_audit_run_id=", "source_activity_id=", "priority=", "status=", "effort_estimate=", "rationale="}, "behavioral interventions should emit stable fields");
+
+    std::ostringstream backlog_out;
+    std::ostringstream backlog_err;
+    rc = life_orchestrator::app::run_application({"behavioral-list-backlog", "--data-root=" + root.string(), "--quiet-startup"}, backlog_out, backlog_err, "", std::filesystem::current_path());
+    assert_true(rc == 0, "behavioral-list-backlog should succeed");
+
+    std::ostringstream reevaluate_out;
+    std::ostringstream reevaluate_err;
+    rc = life_orchestrator::app::run_application({"behavioral-reevaluate-backlog", "--data-root=" + root.string(), "--quiet-startup", "--now", "2026-03-19T10:00:00.000Z"}, reevaluate_out, reevaluate_err, "", std::filesystem::current_path());
+    assert_true(rc == 0, "behavioral-reevaluate-backlog should succeed");
+    const auto reevaluate_text = reevaluate_out.str();
+    assert_true(reevaluate_text.find("behavioral_reevaluate_backlog=ok") != std::string::npos, "reevaluate backlog should emit ok");
+    assert_true(reevaluate_text.find("reevaluated_at=2026-03-19T10:00:00.000Z") != std::string::npos, "reevaluate backlog should preserve deterministic timestamp");
+
+    std::ostringstream status_out;
+    std::ostringstream status_err;
+    rc = life_orchestrator::app::run_application({"behavioral-status", "--data-root=" + root.string(), "--quiet-startup"}, status_out, status_err, "", std::filesystem::current_path());
+    assert_true(rc == 0, "behavioral-status should succeed");
+    const auto status_text = status_out.str();
+    assert_true(status_text.find("behavioral_status=ok") != std::string::npos, "behavioral-status should emit ok");
+    assert_true(status_text.find("state_snapshot_count=1") != std::string::npos, "behavioral-status should deduplicate identical state snapshots");
+    assert_true(status_text.find("intervention_count=") != std::string::npos, "behavioral-status should emit intervention counts");
+
+    std::ostringstream general_status_out;
+    std::ostringstream general_status_err;
+    rc = life_orchestrator::app::run_application({"status", "--data-root=" + root.string(), "--quiet-startup"}, general_status_out, general_status_err, "", std::filesystem::current_path());
+    assert_true(rc == 0, "general status should succeed");
+    const auto general_status_text = general_status_out.str();
+    assert_true(general_status_text.find("behavioral_state_snapshot_count=1") != std::string::npos, "general status should expose behavioral state snapshot count");
+    assert_true(general_status_text.find("behavioral_backlog_count=") != std::string::npos, "general status should expose behavioral backlog count");
+    assert_true(general_status_text.find("behavioral_intervention_count=") != std::string::npos, "general status should expose behavioral intervention count");
+
+    life_orchestrator::control_plane::EventLogger logger{"artifacts/events/app_behavioral_ops_reload.ndjson"};
+    std::filesystem::remove(logger.log_path());
+    life_orchestrator::core::FileMemoryStore store{root, &logger};
+    assert_true(store.load_from_disk().ok, "behavioral CLI reload should succeed");
+    auto summary = store.get_behavioral_memory_summary();
+    assert_true(summary.ok && summary.value->state_snapshot_count == 1, "identical behavioral state reruns should reconcile deterministically");
+}
+
 void test_runtime_hygiene_ignore_file() {
     auto gitignore_path = std::filesystem::exists(".gitignore") ? std::filesystem::path{".gitignore"} : std::filesystem::path{"../.gitignore"};
     std::ifstream in{gitignore_path};
@@ -325,6 +402,7 @@ int main() {
         test_procedural_application_commands();
         test_procedural_proposal_backward_compatibility_defaults();
         test_procedural_list_proposals_emits_default_values();
+        test_behavioral_cli_operational_surface();
         test_runtime_hygiene_ignore_file();
     } catch (const std::exception& e) {
         std::cerr << "Test failure: " << e.what() << '\n';

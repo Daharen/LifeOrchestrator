@@ -14,6 +14,7 @@ using BehavioralDecisionId = std::string;
 using BacklogItemId = std::string;
 using BehavioralStateSnapshotId = std::string;
 using InterventionId = std::string;
+using BehavioralReevaluationId = std::string;
 
 using BehavioralAttributes = std::unordered_map<std::string, std::string>;
 
@@ -40,7 +41,7 @@ enum class BehavioralCapacityLevel { Low, Medium, High, Recovery };
 enum class PsychologicalStateLevel { Stable, Stressed, Fatigued, Overloaded, Recovery };
 enum class InterventionPresentationMode { SilentLog, SuggestivePrompt, ScheduledPrompt, ImmediatePrompt };
 enum class BacklogStatus { Pending, Reconsidered, Approved, Rejected, Expired };
-enum class BehavioralOperationType { RecordState, TriageProposals, ListBacklog, ReevaluateBacklog, ListNextInterventions };
+enum class BehavioralOperationType { RecordState, TriageProposals, ListBacklog, ReevaluateBacklog, ListNextInterventions, Status };
 
 struct BehavioralProposal {
     BehavioralProposalId behavioral_proposal_id;
@@ -77,6 +78,7 @@ struct BehavioralStateSnapshot {
     PsychologicalStateLevel psychological_state_level;
     std::string notes;
     std::uint64_t version;
+    BehavioralAttributes attributes;
 };
 
 struct BehavioralTriageDecision {
@@ -104,6 +106,12 @@ struct BehavioralBacklogItem {
     std::optional<TimestampString> reconsider_after;
     std::string source_module_id;
     std::uint64_t version;
+    std::string source_proposal_id;
+    std::string source_audit_run_id;
+    std::string source_activity_id;
+    std::string priority;
+    std::string effort_estimate;
+    std::string rationale;
 };
 
 struct BehavioralInterventionRecord {
@@ -117,6 +125,23 @@ struct BehavioralInterventionRecord {
     std::string status;
     std::string source_module_id;
     std::uint64_t version;
+    std::string source_proposal_id;
+    std::string source_audit_run_id;
+    std::string source_activity_id;
+    std::string priority;
+    std::string effort_estimate;
+    std::string rationale;
+};
+
+struct BehavioralReevaluationArtifact {
+    BehavioralReevaluationId behavioral_reevaluation_id;
+    TimestampString reevaluated_at;
+    std::string source_module_id;
+    std::size_t backlog_count;
+    std::size_t intervention_count;
+    std::vector<BacklogItemId> reevaluated_backlog_item_ids;
+    std::vector<InterventionId> intervention_ids;
+    std::uint64_t version;
 };
 
 struct BehavioralMemorySummary {
@@ -125,6 +150,7 @@ struct BehavioralMemorySummary {
     std::size_t decision_count;
     std::size_t backlog_count;
     std::size_t intervention_count;
+    std::size_t reevaluation_count;
 };
 
 BehavioralStateSnapshot default_behavioral_state_snapshot();

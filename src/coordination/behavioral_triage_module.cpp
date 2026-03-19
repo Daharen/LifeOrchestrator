@@ -12,7 +12,15 @@ std::string param(const life_orchestrator::core::ActionRequest& request, const s
 double to_double(const std::string& value, double fallback) { return value.empty() ? fallback : std::stod(value); }
 int to_int(const std::string& value, int fallback) { return value.empty() ? fallback : std::stoi(value); }
 std::vector<std::string> split(const std::string& raw) {
-    std::vector<std::string> out; std::stringstream ss(raw); std::string item; while (std::getline(ss, item, '|')) if (!item.empty()) out.push_back(item); return out;
+    std::vector<std::string> out;
+    std::stringstream ss(raw);
+    std::string item;
+    while (std::getline(ss, item, '|')) if (!item.empty()) out.push_back(item);
+    return out;
+}
+std::string proposal_attribute(const life_orchestrator::core::BehavioralProposal& proposal, const std::string& key, const std::string& fallback = "") {
+    auto it = proposal.attributes.find(key);
+    return it == proposal.attributes.end() ? fallback : it->second;
 }
 }
 namespace core = life_orchestrator::core;
@@ -22,7 +30,7 @@ BehavioralTriageModule::BehavioralTriageModule(core::MemoryService* memory_servi
                   "Deterministic behavioral demand governance across proposals.",
                   {"behavioral.record_state", "behavioral.triage_proposals", "behavioral.list_backlog", "behavioral.reevaluate_backlog", "behavioral.list_next_interventions"},
                   "Explicit key-value behavioral triage parameters.",
-                  "Structured ids, capacity, decisions, backlog, and intervention summaries.",
+                  "Structured ids, capacity, decisions, backlog, intervention, and reevaluation summaries.",
                   "Memory-backed behavioral governance state.", {}, core::RiskTier::Suggestive},
       memory_service_(memory_service) {}
 
@@ -40,6 +48,10 @@ core::ActionResponse BehavioralTriageModule::execute(const core::ActionRequest& 
 }
 
 core::ActionResponse BehavioralTriageModule::record_state(const core::ActionRequest& request) {
+    core::BehavioralAttributes attributes;
+    for (const auto& [key, value] : request.parameters) {
+        if (key.rfind("attribute.", 0) == 0) attributes[key.substr(10)] = value;
+    }
     auto snapshot = core::BehavioralStateSnapshot{param(request, "behavioral_state_snapshot_id", "state." + request.request_id),
                                                   param(request, "captured_at", core::current_timestamp_utc()),
                                                   descriptor_.module_id,
@@ -53,9 +65,28 @@ core::ActionResponse BehavioralTriageModule::record_state(const core::ActionRequ
                                                   core::BehavioralCapacityLevel::Medium,
                                                   core::PsychologicalStateLevel::Stable,
                                                   param(request, "notes"),
-                                                  1};
+                                                  1,
+                                                  attributes};
     snapshot.behavioral_capacity_level = param(request, "behavioral_capacity_level").empty() ? core::derive_behavioral_capacity_level(snapshot) : core::behavioral_capacity_level_from_string(param(request, "behavioral_capacity_level"));
     snapshot.psychological_state_level = param(request, "psychological_state_level").empty() ? core::derive_psychological_state_level(snapshot) : core::psychological_state_level_from_string(param(request, "psychological_state_level"));
+    auto existing = memory_service_->list_recent_behavioral_state_snapshots(1000);
+    if (existing.ok && existing.value) {
+        for (const auto& item : *existing.value) {
+            if (item.behavioral_state_snapshot_id == snapshot.behavioral_state_snapshot_id &&
+                item.captured_at == snapshot.captured_at &&
+                item.active_intervention_count == snapshot.active_intervention_count &&
+                item.backlog_count == snapshot.backlog_count &&
+                item.schedule_density_score == snapshot.schedule_density_score &&
+                item.recent_compliance_rate == snapshot.recent_compliance_rate &&
+                item.recent_failure_frequency == snapshot.recent_failure_frequency &&
+                item.fatigue_score == snapshot.fatigue_score &&
+                item.stress_score == snapshot.stress_score &&
+                item.notes == snapshot.notes &&
+                item.attributes == snapshot.attributes) {
+                return {request.request_id, core::ExecutionStatus::Succeeded, descriptor_.module_id, "Behavioral state already recorded.", {{"snapshot_id", snapshot.behavioral_state_snapshot_id}, {"capacity_level", core::to_string(snapshot.behavioral_capacity_level)}}, core::current_timestamp_utc()};
+            }
+        }
+    }
     auto write = memory_service_->append_behavioral_state_snapshot(snapshot);
     if (!write.ok) return {request.request_id, core::ExecutionStatus::Failed, descriptor_.module_id, write.message, {}, core::current_timestamp_utc()};
     return {request.request_id, core::ExecutionStatus::Succeeded, descriptor_.module_id, "Behavioral state recorded.", {{"snapshot_id", snapshot.behavioral_state_snapshot_id}, {"capacity_level", core::to_string(snapshot.behavioral_capacity_level)}}, core::current_timestamp_utc()};
@@ -68,6 +99,13 @@ core::ActionResponse BehavioralTriageModule::triage_proposals(const core::Action
     for (int i = 0; i < proposal_count; ++i) {
         const auto suffix = proposal_count == 1 ? std::string{} : std::to_string(i + 1);
         const auto proposal_id = param(request, "proposal_id" + suffix, "proposal." + request.request_id + (suffix.empty() ? "" : "." + suffix));
+        core::BehavioralAttributes attributes;
+        for (const auto& [key, value] : request.parameters) {
+            if (key.rfind("attribute.", 0) == 0) attributes[key.substr(10)] = value;
+        }
+        attributes["source_proposal_id"] = param(request, "source_proposal_id" + suffix, proposal_id);
+        attributes["source_audit_run_id"] = param(request, "source_audit_run_id" + suffix, proposal_attribute(core::BehavioralProposal{}, "source_audit_run_id", "none"));
+        attributes["source_activity_id"] = param(request, "source_activity_id" + suffix, "none");
         core::BehavioralProposal proposal{proposal_id,
                                           core::behavioral_proposal_type_from_string(param(request, "proposal_type" + suffix, "Reminder")),
                                           param(request, "title" + suffix, "Untitled Proposal"),
@@ -84,7 +122,9 @@ core::ActionResponse BehavioralTriageModule::triage_proposals(const core::Action
                                           now,
                                           now,
                                           1,
-                                          {}};
+                                          attributes};
+        auto existing = memory_service_->get_behavioral_proposal_by_id(proposal.behavioral_proposal_id);
+        if (existing.ok && existing.value) proposal.version = existing.value->version + (existing.value->updated_at == now ? 0 : 1);
         if (!backlog_only) {
             auto write = memory_service_->append_behavioral_proposal(proposal);
             if (!write.ok) return {request.request_id, core::ExecutionStatus::Failed, descriptor_.module_id, write.message, {}, core::current_timestamp_utc()};
@@ -121,15 +161,17 @@ core::ActionResponse BehavioralTriageModule::reevaluate_backlog(const core::Acti
     if (!backlog.ok) return {request.request_id, core::ExecutionStatus::Failed, descriptor_.module_id, backlog.message, {}, core::current_timestamp_utc()};
     std::vector<core::BehavioralProposal> eligible;
     const auto now = param(request, "decision_time", core::current_timestamp_utc());
+    std::vector<core::BacklogItemId> reevaluated_ids;
     for (const auto& item : *backlog.value) {
         if (item.reconsider_after && *item.reconsider_after > now) continue;
         auto proposal = memory_service_->get_behavioral_proposal_by_id(item.behavioral_proposal_id);
-        if (proposal.ok) eligible.push_back(*proposal.value);
+        if (proposal.ok) { eligible.push_back(*proposal.value); reevaluated_ids.push_back(item.backlog_item_id); }
     }
     auto snapshots = memory_service_->list_recent_behavioral_state_snapshots(1);
     const auto snapshot = engine_.effective_snapshot(snapshots.ok && snapshots.value && !snapshots.value->empty() ? std::optional<core::BehavioralStateSnapshot>(snapshots.value->front()) : std::nullopt);
     const auto decisions = engine_.triage(eligible, snapshot, descriptor_.module_id, now);
     int promoted = 0;
+    std::vector<core::InterventionId> intervention_ids;
     for (const auto& item : decisions) {
         memory_service_->append_behavioral_decision(item.decision);
         auto backlog_item = memory_service_->get_behavioral_backlog_item_by_proposal_id(item.proposal.behavioral_proposal_id);
@@ -147,9 +189,21 @@ core::ActionResponse BehavioralTriageModule::reevaluate_backlog(const core::Acti
             }
             memory_service_->upsert_behavioral_backlog_item(updated);
         }
-        if (item.intervention) memory_service_->append_behavioral_intervention(*item.intervention);
+        if (item.intervention) {
+            memory_service_->append_behavioral_intervention(*item.intervention);
+            intervention_ids.push_back(item.intervention->intervention_id);
+        }
     }
-    return {request.request_id, core::ExecutionStatus::Succeeded, descriptor_.module_id, "Behavioral backlog reevaluated.", {{"eligible_count", std::to_string(eligible.size())}, {"promoted_count", std::to_string(promoted)}}, core::current_timestamp_utc()};
+    core::BehavioralReevaluationArtifact artifact{"reevaluation.backlog",
+                                                  now,
+                                                  descriptor_.module_id,
+                                                  backlog.value->size(),
+                                                  intervention_ids.size(),
+                                                  reevaluated_ids,
+                                                  intervention_ids,
+                                                  1};
+    memory_service_->append_behavioral_reevaluation_artifact(artifact);
+    return {request.request_id, core::ExecutionStatus::Succeeded, descriptor_.module_id, "Behavioral backlog reevaluated.", {{"eligible_count", std::to_string(eligible.size())}, {"promoted_count", std::to_string(promoted)}, {"backlog_count", std::to_string(backlog.value->size())}, {"intervention_count", std::to_string(intervention_ids.size())}, {"reevaluated_at", now}}, core::current_timestamp_utc()};
 }
 
 core::ActionResponse BehavioralTriageModule::list_next_interventions(const core::ActionRequest& request) {
