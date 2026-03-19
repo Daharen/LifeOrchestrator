@@ -6,6 +6,7 @@
 #include "meta/procedural_auditor_engine.hpp"
 #include "meta/procedural_auditor_module.hpp"
 
+#include <algorithm>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -747,6 +748,31 @@ void test_operator_alias_resolution_and_suggestions() {
     assert_true(aliases_out.str().find("alias=backlog;command=behavioral-list-backlog") != std::string::npos, "aliases output should expose canonical alias mapping");
 }
 
+void test_application_command_helper_exports() {
+    const auto commands = life_orchestrator::app::list_application_commands();
+    assert_true(std::find(commands.begin(), commands.end(), "status") != commands.end(), "command helper should expose status");
+    assert_true(std::find(commands.begin(), commands.end(), "operator-console") != commands.end(), "command helper should expose operator console");
+
+    const auto aliases = life_orchestrator::app::list_application_aliases();
+    auto saw_backlog = false;
+    for (const auto& [alias, command] : aliases) {
+        if (alias == "backlog" && command == "behavioral-list-backlog") {
+            saw_backlog = true;
+            break;
+        }
+    }
+    assert_true(saw_backlog, "alias helper should expose deterministic alias mappings");
+
+    const auto suggestions = life_orchestrator::app::suggest_application_commands("stat");
+    assert_true(!suggestions.empty() && suggestions.front() == "status", "suggestion helper should preserve deterministic ordering");
+
+    const auto result = life_orchestrator::app::invoke_application_command({"commands", "--data-root=artifacts/app_helper_exports", "--quiet-startup"},
+                                                                           "",
+                                                                           std::filesystem::current_path());
+    assert_true(result.exit_code == 0, "invoke_application_command should succeed");
+    assert_true(result.standard_output.find("commands=ok") != std::string::npos, "command helper should capture stdout");
+}
+
 void test_integration_provider_persistence_redaction_and_visibility() {
     const std::filesystem::path root = "artifacts/operator_provider";
     std::filesystem::remove_all(root);
@@ -838,6 +864,7 @@ int main() {
         test_scheduling_proposal_default_emission_and_backward_compatibility();
         test_runtime_hygiene_ignore_file();
         test_operator_alias_resolution_and_suggestions();
+        test_application_command_helper_exports();
         test_integration_provider_persistence_redaction_and_visibility();
         test_operator_query_provider_and_status_visibility();
     } catch (const std::exception& e) {

@@ -1332,6 +1332,27 @@ int run_application(const std::vector<std::string>& args,
     return static_cast<int>(execute_command(runtime, output, error));
 }
 
+std::vector<std::string> list_application_commands() {
+    return command_names();
+}
+
+std::vector<std::pair<std::string, std::string>> list_application_aliases() {
+    return alias_table();
+}
+
+std::vector<std::string> suggest_application_commands(const std::string& partial) {
+    return deterministic_suggestions(partial);
+}
+
+ApplicationInvocationResult invoke_application_command(const std::vector<std::string>& args,
+                                                       const std::string& environment_data_root,
+                                                       const std::filesystem::path& working_root) {
+    std::ostringstream output;
+    std::ostringstream error;
+    const auto exit_code = run_application(args, output, error, environment_data_root, working_root);
+    return {exit_code, output.str(), error.str()};
+}
+
 std::string to_string(ApplicationRunMode mode) { return run_mode_name(mode); }
 std::string to_string(ApplicationExitCode code) {
     switch (code) {

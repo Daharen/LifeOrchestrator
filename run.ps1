@@ -2,80 +2,39 @@ $ErrorActionPreference = 'Stop'
 
 $RepoRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 $BuildDir = Join-Path $RepoRoot 'build'
-$CachePath = Join-Path $BuildDir 'CMakeCache.txt'
-$TargetName = 'life_orchestrator_app'
-$SelectedConfig = $null
-$IsMultiConfig = $false
 
 if (-not (Test-Path $BuildDir)) {
     New-Item -ItemType Directory -Path $BuildDir | Out-Null
 }
 
-function Get-CMakeCacheValue {
-    param(
-        [string]$CacheFile,
-        [string]$EntryName
-    )
+$Target = 'life_orchestrator_app'
+$RunArgs = @($args)
 
-    if (-not (Test-Path $CacheFile)) {
-        return $null
+if ($args.Count -gt 0 -and ($args[0] -eq 'gui' -or $args[0] -eq 'admin-gui')) {
+    if (-not $IsWindows) {
+        Write-Error 'life_orchestrator_admin_gui is only available on Windows.'
+        exit 1
     }
 
-    $escapedEntryName = [regex]::Escape($EntryName)
-    $line = Select-String -Path $CacheFile -Pattern "^${escapedEntryName}(:[^=]+)?=(.*)$" | Select-Object -First 1
-    if (-not $line) {
-        return $null
+    $Target = 'life_orchestrator_admin_gui'
+    if ($args.Count -gt 1) {
+        $RunArgs = $args[1..($args.Count - 1)]
     }
-
-    return $line.Matches[0].Groups[2].Value
+    else {
+        $RunArgs = @()
+    }
 }
 
 & cmake -S $RepoRoot -B $BuildDir
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
-$generator = Get-CMakeCacheValue -CacheFile $CachePath -EntryName 'CMAKE_GENERATOR'
-$configurationTypes = Get-CMakeCacheValue -CacheFile $CachePath -EntryName 'CMAKE_CONFIGURATION_TYPES'
-if ($configurationTypes) {
-    $IsMultiConfig = $true
-    $SelectedConfig = 'Debug'
-}
-
-$buildArgs = @('--build', $BuildDir, '--target', $TargetName)
-if ($IsMultiConfig) {
-    $buildArgs += @('--config', $SelectedConfig)
-}
-
-& cmake @buildArgs
+& cmake --build $BuildDir --target $Target
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
-$candidatePaths = @()
-if ($IsMultiConfig) {
-    foreach ($configName in @($SelectedConfig, 'Release', 'RelWithDebInfo', 'MinSizeRel')) {
-        $candidatePath = Join-Path (Join-Path $BuildDir $configName) "$TargetName.exe"
-        if ($configName -and -not ($candidatePaths -contains $candidatePath)) {
-            $candidatePaths += $candidatePath
-        }
-    }
-}
-$candidatePaths += @(
-    (Join-Path $BuildDir "$TargetName.exe"),
-    (Join-Path $BuildDir $TargetName)
-)
-
-$AppPath = $candidatePaths | Where-Object { Test-Path $_ } | Select-Object -First 1
-if (-not $AppPath) {
-    $attemptedConfig = if ($SelectedConfig) { $SelectedConfig } else { 'default' }
-    $mode = if ($IsMultiConfig) { 'multi-config' } else { 'single-config' }
-    $checkedPaths = $candidatePaths | ForEach-Object { "  - $_" }
-    Write-Error ((
-        "Unable to locate built executable for target '$TargetName'.`n" +
-        "Generator: $generator`n" +
-        "Launcher mode: $mode`n" +
-        "Attempted build configuration: $attemptedConfig`n" +
-        "Checked paths:`n" +
-        ($checkedPaths -join "`n")
-    ))
+$AppPath = Join-Path $BuildDir ($Target + '.exe')
+if (-not (Test-Path $AppPath)) {
+    $AppPath = Join-Path $BuildDir $Target
 }
 
-& $AppPath @args
+& $AppPath @RunArgs
 exit $LASTEXITCODE

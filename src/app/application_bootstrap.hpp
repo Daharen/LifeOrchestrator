@@ -13,6 +13,7 @@
 #include <memory>
 #include <ostream>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace life_orchestrator::app {
@@ -102,6 +103,13 @@ std::vector<std::shared_ptr<modules::IModule>> build_runtime_modules(Application
 ApplicationExitCode execute_command(ApplicationRuntime& runtime,
                                     std::ostream& output,
                                     std::ostream& error);
+
+struct ApplicationInvocationResult {
+    int exit_code;
+    std::string standard_output;
+    std::string standard_error;
+};
+
 int run_application(const std::vector<std::string>& args,
                     std::ostream& output,
                     std::ostream& error,
@@ -110,5 +118,12 @@ int run_application(const std::vector<std::string>& args,
 
 std::string to_string(ApplicationRunMode mode);
 std::string to_string(ApplicationExitCode code);
+
+std::vector<std::string> list_application_commands();
+std::vector<std::pair<std::string, std::string>> list_application_aliases();
+std::vector<std::string> suggest_application_commands(const std::string& partial);
+ApplicationInvocationResult invoke_application_command(const std::vector<std::string>& args,
+                                                       const std::string& environment_data_root,
+                                                       const std::filesystem::path& working_root);
 
 }  // namespace life_orchestrator::app
