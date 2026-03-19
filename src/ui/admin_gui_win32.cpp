@@ -350,7 +350,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show_command) {
     window_class.lpfnWndProc = window_proc;
     window_class.hInstance = instance;
     window_class.lpszClassName = L"LifeOrchestratorAdminGuiWindow";
-    window_class.hCursor = LoadCursorW(nullptr, MAKEINTRESOURCEW(OCR_NORMAL));
+    window_class.hCursor = LoadCursor(nullptr, IDC_ARROW);
     window_class.hbrBackground = reinterpret_cast<HBRUSH>(COLOR_WINDOW + 1);
     RegisterClassExW(&window_class);
 
