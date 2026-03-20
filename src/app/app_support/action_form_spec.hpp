@@ -20,6 +20,7 @@ struct ActionFormSpec {
     std::string canonical_command_target;
     std::vector<ActionFormFieldSpec> input_fields;
     std::string example_payload;
+    std::vector<std::string> refresh_targets;
 };
 
 }  // namespace life_orchestrator::app

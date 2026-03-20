@@ -1,4 +1,5 @@
 #include "app/app_support/action_form_registry.hpp"
+#include "app/app_support/action_result_view.hpp"
 #include "app/app_support/artifact_presentation_registry.hpp"
 #include "app/application_bootstrap.hpp"
 #include "ui/artifact_panels/artifact_panels_registry.hpp"
@@ -853,6 +854,73 @@ void test_command_surface_aliases_help_and_discoverability() {
 
 
 
+
+void test_quick_action_refresh_targets_are_stable() {
+    struct Expectation { std::string action_id; std::vector<std::string> targets; };
+    const std::vector<Expectation> expectations = {
+        {"create_activity", {"activity_inventory"}},
+        {"record_behavioral_state", {"behavioral_backlog", "behavioral_interventions"}},
+        {"run_procedural_audit", {"procedural_proposals"}},
+        {"behavioral_reevaluation", {"behavioral_reevaluations", "behavioral_backlog", "behavioral_interventions"}},
+        {"generate_scheduling_candidates", {"scheduling_candidates"}},
+        {"generate_schedule_proposals", {"schedule_proposals"}},
+        {"update_provider_configuration", {"provider_config_summary"}},
+        {"provider_readiness_test", {"provider_config_summary"}},
+    };
+    for (const auto& expectation : expectations) {
+        const auto spec = life_orchestrator::app::find_action_form_spec_by_id(expectation.action_id);
+        assert_true(spec.has_value(), "refresh-target expectation should resolve action form spec");
+        assert_true(spec->refresh_targets == expectation.targets, "action form refresh targets should remain stable");
+    }
+}
+
+void test_action_result_view_preserves_authoritative_success_and_failure_output() {
+    const auto create_spec = life_orchestrator::app::find_action_form_spec_by_id("create_activity");
+    assert_true(create_spec.has_value(), "create activity spec should exist for result view tests");
+    const auto success = life_orchestrator::app::build_action_execution_result_view(*create_spec,
+                                                                                     {0,
+                                                                                      R"(procedural_upsert_activity=ok
+activity_id=activity.gui
+version=1
+)",
+                                                                                      ""});
+    assert_true(success.succeeded, "successful result view should preserve exit code authority");
+    assert_true(success.action_label == "Create Activity", "result view should preserve action label");
+    assert_true(success.canonical_command_id == "procedural-upsert-activity", "result view should preserve canonical command id");
+    assert_true(success.output_rows.size() >= 3, "successful result view should parse deterministic output rows");
+    assert_true(success.next_state_hint.find("Activity Inventory") != std::string::npos, "next-state hint should use registry-sourced artifact label");
+
+    const auto failure_spec = life_orchestrator::app::find_action_form_spec_by_id("record_behavioral_state");
+    assert_true(failure_spec.has_value(), "behavioral state spec should exist for result view tests");
+    const auto failure = life_orchestrator::app::build_action_execution_result_view(*failure_spec,
+                                                                                     {2,
+                                                                                      "",
+                                                                                      R"(validation=failed
+accepted_flags=--motivation-level,--motivation
+)"});
+    assert_true(!failure.succeeded, "failed result view should preserve failure status");
+    assert_true(failure.raw_output.find("accepted_flags=--motivation-level,--motivation") != std::string::npos, "failed result view should preserve authoritative command-layer error text");
+    assert_true(!failure.output_rows.empty(), "failed result view should still parse deterministic failure rows");
+}
+
+void test_execute_action_form_command_refreshes_only_registered_query_surfaces() {
+    const std::filesystem::path root = "artifacts/action_feedback_refresh";
+    std::filesystem::remove_all(root);
+
+    const auto create_spec = life_orchestrator::app::find_action_form_spec_by_id("create_activity");
+    assert_true(create_spec.has_value(), "create activity spec should exist for refresh execution tests");
+    const auto feedback = life_orchestrator::app::execute_action_form_command(*create_spec,
+                                                                              {create_spec->canonical_command_target, "--data-root=" + root.string(), "--activity-id", "activity.gui.refresh", "--title", "GUI refresh", "--domain-source", "planning", "--frequency", "daily", "--duration-minutes", "30", "--effort-estimate", "4", "--outcome-value", "6", "--now", "2026-03-19T09:00:00.000Z"},
+                                                                              "",
+                                                                              std::filesystem::current_path());
+    assert_true(feedback.result_view.succeeded, "successful action execution feedback should report success");
+    assert_true(feedback.refreshed_artifacts.size() == 1, "successful action execution should refresh only registered targets");
+    assert_true(feedback.refreshed_artifacts.front().query_args.size() >= 3 && feedback.refreshed_artifacts.front().query_args.front() == "artifact.query", "refresh should execute only through artifact query surface");
+    assert_true(feedback.refreshed_artifacts.front().query_args[2] == "activity_inventory", "refresh should target registered activity inventory artifact type");
+    assert_true(feedback.refreshed_artifacts.front().query_result.exit_code == 0, "refresh query should succeed through authoritative artifact surface");
+    assert_true(feedback.refreshed_artifacts.front().query_result.standard_output.find("artifact_query=ok") != std::string::npos, "refresh query should remain an artifact.query invocation");
+}
+
 void test_supported_quick_actions_have_stable_ordered_fields() {
     struct OrderedFieldExpectation {
         std::string action_id;
@@ -1148,6 +1216,9 @@ int main() {
         test_operator_alias_resolution_and_suggestions();
         test_application_command_helper_exports();
         test_command_surface_aliases_help_and_discoverability();
+        test_quick_action_refresh_targets_are_stable();
+        test_action_result_view_preserves_authoritative_success_and_failure_output();
+        test_execute_action_form_command_refreshes_only_registered_query_surfaces();
         test_supported_quick_actions_have_stable_ordered_fields();
         test_action_form_submission_uses_registry_flag_names();
         test_artifact_presentation_and_action_form_registries();

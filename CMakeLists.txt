@@ -39,7 +39,9 @@ target_link_libraries(lifeorchestrator_control_plane PUBLIC lifeorchestrator_cor
 add_library(lifeorchestrator_app_support
     src/app/application_bootstrap.cpp
     src/app/app_support/action_form_registry.cpp
+    src/app/app_support/action_result_view.cpp
     src/app/app_support/artifact_presentation_registry.cpp
+    src/app/app_support/artifact_refresh_registry.cpp
     src/app/app_support/artifact_query_service.cpp
     src/app/app_support/artifact_query_module.cpp
     src/app/app_support/memory/activity_repository.cpp
