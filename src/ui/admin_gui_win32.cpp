@@ -9,6 +9,7 @@
 #endif
 
 #include "app/app_support/action_form_registry.hpp"
+#include "app/app_support/action_result_view.hpp"
 #include "app/application_bootstrap.hpp"
 
 #include <windows.h>
@@ -328,6 +329,39 @@ void refresh_suggestions(HWND hwnd) {
     }
 }
 
+
+std::string render_action_feedback(const life_orchestrator::app::ActionExecutionFeedback& feedback) {
+    std::string rendered;
+    rendered += "action_label=" + feedback.result_view.action_label + "\n";
+    rendered += "canonical_command=" + feedback.result_view.canonical_command_id + "\n";
+    rendered += "status=" + std::string(feedback.result_view.succeeded ? "success" : "failure") + "\n";
+    rendered += "exit_code=" + std::to_string(feedback.result_view.exit_code) + "\n";
+    if (!feedback.result_view.output_rows.empty()) {
+        rendered += "\n[result_rows]\n";
+        for (const auto& row : feedback.result_view.output_rows) rendered += row.key + "=" + row.value + "\n";
+    } else if (!feedback.result_view.raw_output.empty()) {
+        rendered += "\n[raw_output]\n";
+        rendered += feedback.result_view.raw_output;
+        if (feedback.result_view.raw_output.back() != '\n') rendered += "\n";
+    }
+    rendered += "\n[next_state_hint]\n" + feedback.result_view.next_state_hint + "\n";
+    if (!feedback.refreshed_artifacts.empty()) {
+        rendered += "\n[refreshed_artifacts]\n";
+        for (const auto& refreshed : feedback.refreshed_artifacts) {
+            rendered += "artifact=" + refreshed.target.display_label + "\n";
+            rendered += "query_command=";
+            for (std::size_t i = 0; i < refreshed.query_args.size(); ++i) {
+                if (i != 0) rendered += ' ';
+                rendered += refreshed.query_args[i];
+            }
+            rendered += "\n";
+            if (!refreshed.query_result.standard_output.empty()) rendered += refreshed.query_result.standard_output;
+            if (!rendered.empty() && rendered.back() != '\n') rendered += "\n";
+        }
+    }
+    return rendered;
+}
+
 void execute_args(HWND hwnd, const std::vector<std::string>& args) {
     auto* state = state_from(hwnd);
     if (state == nullptr) return;
@@ -497,7 +531,9 @@ LRESULT CALLBACK window_proc(HWND hwnd, UINT message, WPARAM w_param, LPARAM l_p
                                 set_status(hwnd, "Action dialog cancelled.");
                                 return 0;
                             }
-                            execute_args(hwnd, *submitted);
+                            const auto feedback = life_orchestrator::app::execute_action_form_command(*spec, *submitted, state->environment_data_root, state->working_root);
+                            set_output(hwnd, render_action_feedback(feedback));
+                            set_status(hwnd, feedback.result_view.succeeded ? "Action succeeded and refresh targets updated." : "Action failed; authoritative result preserved.");
                             return 0;
                         }
                     }
