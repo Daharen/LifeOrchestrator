@@ -1,4 +1,6 @@
 #include "ui/artifact_renderer.hpp"
+#include "app/app_support/action_form_registry.hpp"
+#include "app/app_support/artifact_presentation_registry.hpp"
 #include "app/application_bootstrap.hpp"
 #include "coordination/scheduling_engine.hpp"
 
@@ -171,12 +173,9 @@ std::optional<CommandHelpSpec> command_help_spec_for_mode(ApplicationRunMode mod
 }
 
 std::vector<std::string> quick_action_labels_for_command(const std::string& command) {
-    if (command == "procedural-upsert-activity") return {"Create Activity"};
-    if (command == "behavioral-record-state") return {"Record Behavioral State"};
-    if (command == "procedural-run-audit") return {"Run Procedural Audit"};
-    if (command == "scheduling-generate-candidates") return {"Generate Scheduling Candidates"};
-    if (command == "scheduling-generate-proposals") return {"Generate Schedule Proposals"};
-    return {};
+    std::vector<std::string> labels;
+    if (const auto spec = find_action_form_spec_by_command_target(command); spec.has_value()) labels.push_back(spec->display_label);
+    return labels;
 }
 
 const std::vector<std::string>& command_names() {
@@ -1379,7 +1378,12 @@ ApplicationExitCode execute_command(ApplicationRuntime& runtime,
                    << "artifact_type=" << runtime.config.command_parameters.at("artifact_type") << '\n'
                    << "artifact_count=" << result.value->artifacts.size() << '\n';
             for (const auto& artifact : result.value->artifacts) {
-                output << ui::render_artifact_as_text(artifact);
+                const auto schema = find_artifact_presentation_schema(artifact.artifact_type);
+                if (!schema.has_value()) {
+                    error << "error=missing_artifact_presentation_schema\n";
+                    return complete(ApplicationExitCode::RuntimeOperationFailure, "Missing artifact presentation schema.");
+                }
+                output << ui::render_artifact_as_text(artifact, *schema);
             }
             return complete(ApplicationExitCode::Success, "Artifact query completed.");
         }

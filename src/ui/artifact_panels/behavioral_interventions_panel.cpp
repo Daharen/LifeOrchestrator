@@ -2,7 +2,6 @@
 
 namespace life_orchestrator::ui {
 
-BehavioralInterventionsPanel::BehavioralInterventionsPanel()
-    : ArtifactPanel("behavioral_interventions_panel", "Behavioral Interventions", "behavioral_interventions", {}) {}
+BehavioralInterventionsPanel::BehavioralInterventionsPanel() : ArtifactPanel("behavioral_interventions") {}
 
 }  // namespace life_orchestrator::ui

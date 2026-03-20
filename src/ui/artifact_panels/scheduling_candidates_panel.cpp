@@ -2,7 +2,6 @@
 
 namespace life_orchestrator::ui {
 
-SchedulingCandidatesPanel::SchedulingCandidatesPanel()
-    : ArtifactPanel("scheduling_candidates_panel", "Scheduling Candidates", "scheduling_candidates", {{"Generate Scheduling Candidates", {"scheduling-generate-candidates"}}, {"Generate Schedule Proposals", {"scheduling-generate-proposals"}}}) {}
+SchedulingCandidatesPanel::SchedulingCandidatesPanel() : ArtifactPanel("scheduling_candidates") {}
 
 }  // namespace life_orchestrator::ui

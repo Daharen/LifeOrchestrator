@@ -1,4 +1,7 @@
+#include "app/app_support/action_form_registry.hpp"
+#include "app/app_support/artifact_presentation_registry.hpp"
 #include "app/application_bootstrap.hpp"
+#include "ui/artifact_panels/artifact_panels_registry.hpp"
 #include "control_plane/control_plane.hpp"
 #include "coordination/behavioral_triage_module.hpp"
 #include "coordination/scheduling_coordination_module.hpp"
@@ -847,6 +850,105 @@ void test_command_surface_aliases_help_and_discoverability() {
     assert_true(std::find(state_suggestions.begin(), state_suggestions.end(), "state=>behavioral-record-state") != state_suggestions.end(), "palette suggestions should index state alias");
 }
 
+
+void test_artifact_presentation_and_action_form_registries() {
+    const std::vector<std::string> expected_artifacts = {"activity_inventory", "procedural_proposals", "behavioral_backlog", "behavioral_interventions", "scheduling_candidates", "schedule_proposals", "behavioral_reevaluations", "provider_config_summary"};
+    for (const auto& artifact_type : expected_artifacts) {
+        const auto schema = life_orchestrator::app::find_artifact_presentation_schema(artifact_type);
+        assert_true(schema.has_value(), "every supported artifact type should resolve to a presentation schema");
+    }
+
+    const std::vector<std::string> expected_actions = {"create_activity", "record_behavioral_state", "run_procedural_audit", "behavioral_reevaluation", "generate_scheduling_candidates", "generate_schedule_proposals", "update_provider_configuration", "provider_readiness_test"};
+    for (const auto& action_id : expected_actions) {
+        const auto spec = life_orchestrator::app::find_action_form_spec_by_id(action_id);
+        assert_true(spec.has_value(), "every GUI quick action should resolve to an authoritative action form spec");
+    }
+
+    const auto activity_schema = life_orchestrator::app::find_artifact_presentation_schema("activity_inventory");
+    assert_true(activity_schema.has_value(), "activity inventory schema should exist");
+    assert_true(activity_schema->summary_fields.size() >= 3, "activity schema should define ordered summary fields");
+    assert_true(activity_schema->summary_fields[0].field_key == "title", "activity schema should keep title first");
+    assert_true(activity_schema->summary_fields[1].field_key == "domain_source", "activity schema should keep domain second");
+    assert_true(activity_schema->summary_fields[2].field_key == "frequency", "activity schema should keep frequency third");
+
+    const auto provider_schema = life_orchestrator::app::find_artifact_presentation_schema("provider_config_summary");
+    assert_true(provider_schema.has_value(), "provider schema should exist");
+    for (const auto& field : provider_schema->summary_fields) {
+        assert_true(field.field_key != "api_key", "provider config schema must not surface raw secret fields");
+    }
+
+    const auto provider_update = life_orchestrator::app::find_action_form_spec_by_id("update_provider_configuration");
+    assert_true(provider_update.has_value(), "provider update action form should exist");
+    assert_true(provider_update->display_label == "Provider Configuration Update", "provider action label should be authoritative");
+}
+
+void test_gui_panels_and_quick_actions_source_registry_labels() {
+    const auto panels = life_orchestrator::ui::build_artifact_panels();
+    assert_true(panels.size() == life_orchestrator::app::list_artifact_panel_definition_ids().size(), "GUI panels should align with registry-defined artifact panels");
+
+    auto procedural_panel = std::find_if(panels.begin(), panels.end(), [](const auto& panel) { return panel->artifact_type() == "procedural_proposals"; });
+    assert_true(procedural_panel != panels.end(), "procedural proposals panel should exist");
+    assert_true((*procedural_panel)->title() == "Procedural Proposals", "panel title should come from artifact registry");
+    assert_true(!(*procedural_panel)->actions().empty(), "procedural proposals panel should expose schema-driven actions");
+    assert_true((*procedural_panel)->actions().front().button_label == "Run Procedural Audit", "panel action labels should come from authoritative schema");
+
+    const auto create_activity = life_orchestrator::app::find_action_form_spec_by_command_target("procedural-upsert-activity");
+    assert_true(create_activity.has_value(), "create activity action form should resolve by canonical command");
+    assert_true(create_activity->display_label == "Create Activity", "GUI quick-action label should be registry sourced");
+}
+
+void test_command_help_and_action_form_consistency() {
+    const std::filesystem::path root = "artifacts/action_form_help";
+    std::filesystem::remove_all(root);
+    struct Check { std::string command; std::string action_id; std::vector<std::string> canonical_flags; };
+    const std::vector<Check> checks = {
+        {"procedural-upsert-activity", "create_activity", {"--activity-id", "--title", "--domain-source", "--frequency", "--duration-minutes", "--effort-estimate", "--outcome-value"}},
+        {"behavioral-record-state", "record_behavioral_state", {"--available-capacity", "--stress-level", "--cognitive-load", "--motivation-level", "--recovery-status"}},
+        {"scheduling-generate-candidates", "generate_scheduling_candidates", {"--now"}},
+        {"scheduling-generate-proposals", "generate_schedule_proposals", {"--now"}},
+    };
+
+    for (const auto& check : checks) {
+        std::ostringstream out;
+        std::ostringstream err;
+        const auto rc = life_orchestrator::app::run_application({check.command, "--data-root=" + root.string(), "--quiet-startup", "--help"}, out, err, "", std::filesystem::current_path());
+        assert_true(rc == 0, "command help should succeed for action form consistency checks");
+        const auto help_text = out.str();
+        const auto spec = life_orchestrator::app::find_action_form_spec_by_id(check.action_id);
+        assert_true(spec.has_value(), "action form spec should exist for consistency check");
+        assert_true(help_text.find("canonical_command=" + spec->canonical_command_target) != std::string::npos, "help should match action form canonical command target");
+        for (const auto& flag : check.canonical_flags) {
+            assert_true(help_text.find(flag) != std::string::npos, "help should include canonical flag from action form spec");
+            auto field_it = std::find_if(spec->input_fields.begin(), spec->input_fields.end(), [&](const auto& field) {
+                return std::find(field.accepted_flags.begin(), field.accepted_flags.end(), flag) != field.accepted_flags.end();
+            });
+            assert_true(field_it != spec->input_fields.end(), "action form spec should include canonical help flag");
+        }
+    }
+}
+
+void test_form_spec_missing_required_inputs_defer_to_command_layer() {
+    const std::filesystem::path root = "artifacts/form_spec_missing_inputs";
+    std::filesystem::remove_all(root);
+    const auto spec = life_orchestrator::app::find_action_form_spec_by_id("record_behavioral_state");
+    assert_true(spec.has_value(), "record behavioral state form spec should exist");
+    auto rc_out = std::ostringstream{};
+    auto rc_err = std::ostringstream{};
+    const auto rc = life_orchestrator::app::run_application({spec->canonical_command_target,
+                                                             "--data-root=" + root.string(),
+                                                             "--quiet-startup",
+                                                             "--available-capacity", "8",
+                                                             "--stress-level", "2",
+                                                             "--cognitive-load", "3",
+                                                             "--recovery-status", "8"},
+                                                            rc_out,
+                                                            rc_err,
+                                                            "",
+                                                            std::filesystem::current_path());
+    assert_true(rc == 2, "missing required inputs through form spec path should still fail in deterministic command layer");
+    assert_true(rc_err.str().find("accepted_flags=--motivation-level,--motivation") != std::string::npos, "command-layer validation should remain authoritative for missing required inputs");
+}
+
 void test_end_to_end_naive_operator_flow() {
     const std::filesystem::path root = "artifacts/naive_operator_flow";
     std::filesystem::remove_all(root);
@@ -986,6 +1088,10 @@ int main() {
         test_operator_alias_resolution_and_suggestions();
         test_application_command_helper_exports();
         test_command_surface_aliases_help_and_discoverability();
+        test_artifact_presentation_and_action_form_registries();
+        test_gui_panels_and_quick_actions_source_registry_labels();
+        test_command_help_and_action_form_consistency();
+        test_form_spec_missing_required_inputs_defer_to_command_layer();
         test_end_to_end_naive_operator_flow();
         test_integration_provider_persistence_redaction_and_visibility();
         test_operator_query_provider_and_status_visibility();
