@@ -22,6 +22,7 @@ public:
                                                          bool accepted);
     std::vector<AssistantShellSessionSummary> ListSessions() const;
     std::optional<AssistantShellStatusSnapshot> LoadLastStatus(const std::string& session_id) const;
+    life_orchestrator::app::ApplicationInvocationResult RunCommand(const std::vector<std::string>& args) const;
 
 private:
     struct PendingConfirmationState {

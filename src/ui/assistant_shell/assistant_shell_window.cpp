@@ -5,49 +5,103 @@
 #endif
 #include <windows.h>
 
+#include <shellapi.h>
+
+#include <algorithm>
+#include <filesystem>
+#include <sstream>
+#include <string>
+#include <vector>
+
 namespace life_orchestrator::ui::assistant_shell {
 namespace {
-LRESULT CALLBACK window_proc(HWND hwnd, UINT message, WPARAM w_param, LPARAM l_param) {
-    switch (message) {
-        case WM_DESTROY: PostQuitMessage(0); return 0;
-        default: return DefWindowProcW(hwnd, message, w_param, l_param);
+constexpr int kMenuFile = 100;
+constexpr int kMenuSettings = 101;
+constexpr int kMenuActiveInterfaces = 102;
+constexpr int kMenuActiveModules = 103;
+constexpr int kMenuApiKeys = 104;
+constexpr int kMenuConsole = 105;
+constexpr int kMenuDeveloperLayer = 106;
+constexpr int kMenuHelp = 107;
+constexpr int kControlTitle = 200;
+constexpr int kControlComposer = 201;
+constexpr int kControlSubmit = 202;
+constexpr int kControlAttach = 203;
+constexpr int kControlTogglePanel = 204;
+constexpr int kControlConfirmAccept = 205;
+constexpr int kControlConfirmDecline = 206;
+constexpr int kMinimumWindowWidth = 980;
+constexpr int kMinimumWindowHeight = 640;
+
+std::wstring widen(const std::string& value) {
+    if (value.empty()) return {};
+    const int size = MultiByteToWideChar(CP_UTF8, 0, value.c_str(), static_cast<int>(value.size()), nullptr, 0);
+    std::wstring result(static_cast<std::size_t>(size), L'\0');
+    MultiByteToWideChar(CP_UTF8, 0, value.c_str(), static_cast<int>(value.size()), result.data(), size);
+    return result;
+}
+
+std::string narrow(const std::wstring& value) {
+    if (value.empty()) return {};
+    const int size = WideCharToMultiByte(CP_UTF8, 0, value.c_str(), static_cast<int>(value.size()), nullptr, 0, nullptr, nullptr);
+    std::string result(static_cast<std::size_t>(size), '\0');
+    WideCharToMultiByte(CP_UTF8, 0, value.c_str(), static_cast<int>(value.size()), result.data(), size, nullptr, nullptr);
+    return result;
+}
+
+std::string get_window_text_utf8(HWND handle) {
+    const int length = GetWindowTextLengthW(handle);
+    std::wstring buffer(static_cast<std::size_t>(length + 1), L'\0');
+    GetWindowTextW(handle, buffer.data(), length + 1);
+    buffer.resize(static_cast<std::size_t>(length));
+    return narrow(buffer);
+}
+
+void append_menu_item(HMENU menu, UINT id, const wchar_t* title) {
+    AppendMenuW(menu, MF_STRING, id, title);
+}
+}
+
+LRESULT CALLBACK AssistantShellWindow::WindowProc(HWND hwnd, UINT message, WPARAM w_param, LPARAM l_param) {
+    AssistantShellWindow* self = reinterpret_cast<AssistantShellWindow*>(GetWindowLongPtrW(hwnd, GWLP_USERDATA));
+    if (message == WM_NCCREATE) {
+        auto* create = reinterpret_cast<CREATESTRUCTW*>(l_param);
+        self = reinterpret_cast<AssistantShellWindow*>(create->lpCreateParams);
+        SetWindowLongPtrW(hwnd, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(self));
+        if (self != nullptr) self->hwnd_ = hwnd;
+        return TRUE;
     }
+    if (self == nullptr) return DefWindowProcW(hwnd, message, w_param, l_param);
+    return self->HandleMessage(message, w_param, l_param);
 }
-}
+
 AssistantShellWindow::AssistantShellWindow(std::shared_ptr<AssistantShellController> controller) : controller_(std::move(controller)) {}
+
 int AssistantShellWindow::Run(HINSTANCE instance, int show_command) {
+    instance_ = instance;
     const wchar_t* class_name = L"LifeOrchestratorAssistantShellWindow";
     WNDCLASSW wc{};
-    wc.lpfnWndProc = window_proc;
+    wc.lpfnWndProc = AssistantShellWindow::WindowProc;
     wc.hInstance = instance;
     wc.lpszClassName = class_name;
+    wc.hCursor = LoadCursor(nullptr, IDC_ARROW);
+    wc.hbrBackground = reinterpret_cast<HBRUSH>(COLOR_WINDOW + 1);
     RegisterClassW(&wc);
-    HWND hwnd = CreateWindowExW(0, class_name, L"Life Orchestrator Assistant Shell", WS_OVERLAPPEDWINDOW, CW_USEDEFAULT, CW_USEDEFAULT, 1280, 800, nullptr, nullptr, instance, nullptr);
-    CreateMenu();
-    auto transcript = AssistantShellMessageSurface{};
-    transcript.Attach(hwnd, instance);
-    auto confirmation = AssistantShellConfirmationSurface{};
-    confirmation.Attach(hwnd, instance);
-    auto status = AssistantShellStatusBar{};
-    status.Attach(hwnd, instance);
-    auto tool_panel = AssistantShellToolPanel{};
-    tool_panel.Attach(hwnd, instance);
-    tool_panel.SetVisible(false);
-    CreateWindowExW(0, L"STATIC", L"Life Orchestrator Assistant Shell", WS_CHILD | WS_VISIBLE, 12, 8, 400, 24, hwnd, nullptr, instance, nullptr);
-    CreateWindowExW(0, L"EDIT", L"", WS_CHILD | WS_VISIBLE | ES_AUTOHSCROLL | WS_BORDER, 12, 700, 940, 26, hwnd, nullptr, instance, nullptr);
-    CreateWindowExW(0, L"BUTTON", L"Submit", WS_CHILD | WS_VISIBLE, 960, 700, 90, 26, hwnd, nullptr, instance, nullptr);
-    CreateWindowExW(0, L"BUTTON", L"Attach", WS_CHILD | WS_VISIBLE, 1060, 700, 90, 26, hwnd, nullptr, instance, nullptr);
-    MoveWindow(transcript.handle(), 12, 60, 940, 600, TRUE);
-    MoveWindow(confirmation.handle(), 12, 666, 940, 26, TRUE);
-    MoveWindow(status.handle(), 12, 734, 1240, 24, TRUE);
-    MoveWindow(tool_panel.handle(), 970, 60, 280, 632, TRUE);
-    auto menu = CreateMenu();
-    for (const wchar_t* title : {L"File", L"Settings", L"Active Interfaces", L"Active Modules", L"API Keys", L"Console", L"Developer Layer", L"Help"}) {
-        AppendMenuW(menu, MF_STRING, 0, title);
-    }
-    SetMenu(hwnd, menu);
-    ShowWindow(hwnd, show_command);
-    controller_->Start();
+    hwnd_ = CreateWindowExW(0,
+                            class_name,
+                            L"Life Orchestrator Assistant Shell",
+                            WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN,
+                            CW_USEDEFAULT,
+                            CW_USEDEFAULT,
+                            1280,
+                            800,
+                            nullptr,
+                            nullptr,
+                            instance,
+                            this);
+    if (hwnd_ == nullptr) return 1;
+    ShowWindow(hwnd_, show_command);
+    UpdateWindow(hwnd_);
     MSG msg{};
     while (GetMessageW(&msg, nullptr, 0, 0)) {
         TranslateMessage(&msg);
@@ -55,5 +109,287 @@ int AssistantShellWindow::Run(HINSTANCE instance, int show_command) {
     }
     return static_cast<int>(msg.wParam);
 }
+
+LRESULT AssistantShellWindow::HandleMessage(UINT message, WPARAM w_param, LPARAM l_param) {
+    switch (message) {
+        case WM_CREATE: CreateUi(); InitializeShell(); return 0;
+        case WM_SIZE: Layout(); return 0;
+        case WM_GETMINMAXINFO: {
+            auto* info = reinterpret_cast<MINMAXINFO*>(l_param);
+            info->ptMinTrackSize.x = kMinimumWindowWidth;
+            info->ptMinTrackSize.y = kMinimumWindowHeight;
+            return 0;
+        }
+        case WM_COMMAND: {
+            const int id = LOWORD(w_param);
+            if (HIWORD(w_param) == BN_CLICKED) {
+                if (id == kControlSubmit) { SubmitComposer(); return 0; }
+                if (id == kControlTogglePanel) { ToggleToolPanel(); return 0; }
+                if (id == kControlConfirmAccept) { ResolveConfirmation(true); return 0; }
+                if (id == kControlConfirmDecline) { ResolveConfirmation(false); return 0; }
+            }
+            if (id == kMenuDeveloperLayer) { OpenDeveloperLayer(); return 0; }
+            if (id == kMenuConsole) { OpenConsole(); return 0; }
+            if (id == kMenuApiKeys) { OpenProviderConfiguration(); return 0; }
+            if (id == kMenuActiveModules) { ShowActiveModules(); return 0; }
+            if (id == kMenuActiveInterfaces) { ShowActiveInterfaces(); return 0; }
+            if (id == kMenuHelp) { ShowHelp(); return 0; }
+            if (id == kMenuSettings) { ShowSettings(); return 0; }
+            return 0;
+        }
+        case WM_KEYDOWN:
+            if (GetFocus() == composer_edit_ && w_param == VK_RETURN && (GetKeyState(VK_SHIFT) & 0x8000) == 0) {
+                SubmitComposer();
+                return 0;
+            }
+            break;
+        case WM_DESTROY: PostQuitMessage(0); return 0;
+        default: break;
+    }
+    return DefWindowProcW(hwnd_, message, w_param, l_param);
+}
+
+void AssistantShellWindow::CreateUi() {
+    auto menu = CreateMenu();
+    append_menu_item(menu, kMenuFile, L"File");
+    append_menu_item(menu, kMenuSettings, L"Settings");
+    append_menu_item(menu, kMenuActiveInterfaces, L"Active Interfaces");
+    append_menu_item(menu, kMenuActiveModules, L"Active Modules");
+    append_menu_item(menu, kMenuApiKeys, L"API Keys");
+    append_menu_item(menu, kMenuConsole, L"Console");
+    append_menu_item(menu, kMenuDeveloperLayer, L"Developer Layer");
+    append_menu_item(menu, kMenuHelp, L"Help");
+    SetMenu(hwnd_, menu);
+
+    transcript_.Attach(hwnd_, instance_);
+    confirmation_.Attach(hwnd_, instance_);
+    status_.Attach(hwnd_, instance_);
+    tool_panel_.Attach(hwnd_, instance_);
+
+    title_label_ = CreateWindowExW(0, L"STATIC", L"Life Orchestrator Assistant Shell", WS_CHILD | WS_VISIBLE, 0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kControlTitle), instance_, nullptr);
+    composer_edit_ = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", L"", WS_CHILD | WS_VISIBLE | ES_MULTILINE | ES_AUTOVSCROLL | WS_VSCROLL, 0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kControlComposer), instance_, nullptr);
+    submit_button_ = CreateWindowExW(0, L"BUTTON", L"Submit", WS_CHILD | WS_VISIBLE | BS_DEFPUSHBUTTON, 0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kControlSubmit), instance_, nullptr);
+    attach_button_ = CreateWindowExW(0, L"BUTTON", L"Attach", WS_CHILD | WS_VISIBLE, 0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kControlAttach), instance_, nullptr);
+    toggle_panel_button_ = CreateWindowExW(0, L"BUTTON", L"Hide Panel", WS_CHILD | WS_VISIBLE, 0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kControlTogglePanel), instance_, nullptr);
+    confirm_accept_button_ = CreateWindowExW(0, L"BUTTON", L"Confirm", WS_CHILD, 0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kControlConfirmAccept), instance_, nullptr);
+    confirm_decline_button_ = CreateWindowExW(0, L"BUTTON", L"Cancel", WS_CHILD, 0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kControlConfirmDecline), instance_, nullptr);
+
+    SendMessageW(composer_edit_, EM_SETLIMITTEXT, 8000, 0);
+    Layout();
+}
+
+void AssistantShellWindow::InitializeShell() {
+    const auto startup = controller_->Start();
+    session_id_ = startup.session.session_id;
+    composer_placeholder_ = startup.composer.placeholder_text;
+    transcript_lines_.clear();
+    for (const auto& message : startup.initial_messages) AppendMessage(message);
+    UpdateStatus(startup.status);
+    UpdateToolPanel(startup.tool_panel_sections);
+    SetWindowTextW(composer_edit_, L"");
+    UpdateConfirmationSurface();
+}
+
+void AssistantShellWindow::Layout() {
+    if (hwnd_ == nullptr) return;
+    RECT client{};
+    GetClientRect(hwnd_, &client);
+    const int width = client.right - client.left;
+    const int height = client.bottom - client.top;
+    const int margin = 12;
+    const int gutter = 10;
+    const int title_height = 24;
+    const int status_height = 24;
+    const int composer_height = 78;
+    const int confirmation_height = 32;
+    const int button_width = 92;
+    const int side_width = tool_panel_visible_ ? std::clamp(width / 4, 260, 360) : 0;
+    const int main_width = width - (margin * 2) - (tool_panel_visible_ ? side_width + gutter : 0);
+    const int transcript_top = margin + title_height + 8;
+    const int transcript_bottom = height - margin - status_height - gutter - composer_height - gutter - confirmation_height - gutter;
+    const int transcript_height = std::max(180, transcript_bottom - transcript_top);
+    const int main_left = margin;
+    const int side_left = main_left + main_width + gutter;
+
+    MoveWindow(title_label_, main_left, margin, std::max(240, main_width - 120), title_height, TRUE);
+    MoveWindow(toggle_panel_button_, main_left + std::max(240, main_width - 120), margin - 2, 108, 28, TRUE);
+    MoveWindow(transcript_.handle(), main_left, transcript_top, main_width, transcript_height, TRUE);
+    MoveWindow(confirmation_.handle(), main_left, transcript_top + transcript_height + gutter, std::max(300, main_width - (button_width * 2) - 12), confirmation_height, TRUE);
+    MoveWindow(confirm_accept_button_, main_left + std::max(300, main_width - (button_width * 2) - 12) + 6, transcript_top + transcript_height + gutter, button_width, confirmation_height, TRUE);
+    MoveWindow(confirm_decline_button_, main_left + std::max(300, main_width - (button_width * 2) - 12) + 6 + button_width + 6, transcript_top + transcript_height + gutter, button_width, confirmation_height, TRUE);
+    MoveWindow(composer_edit_, main_left, height - margin - status_height - gutter - composer_height, std::max(320, main_width - (button_width * 2) - 12), composer_height, TRUE);
+    MoveWindow(submit_button_, main_left + std::max(320, main_width - (button_width * 2) - 12) + 6, height - margin - status_height - gutter - composer_height, button_width, 32, TRUE);
+    MoveWindow(attach_button_, main_left + std::max(320, main_width - (button_width * 2) - 12) + 6, height - margin - status_height - gutter - composer_height + 38, button_width, 32, TRUE);
+    MoveWindow(status_.handle(), main_left, height - margin - status_height, width - (margin * 2), status_height, TRUE);
+
+    tool_panel_.SetVisible(tool_panel_visible_);
+    if (tool_panel_visible_) MoveWindow(tool_panel_.handle(), side_left, transcript_top, side_width, transcript_height + confirmation_height + gutter + composer_height, TRUE);
+    ShowWindow(confirm_accept_button_, pending_confirmation_.has_value() ? SW_SHOW : SW_HIDE);
+    ShowWindow(confirm_decline_button_, pending_confirmation_.has_value() ? SW_SHOW : SW_HIDE);
+    InvalidateRect(hwnd_, nullptr, TRUE);
+}
+
+void AssistantShellWindow::AppendMessage(const app::assistant_shell::AssistantShellMessage& message) {
+    for (const auto& block : message.blocks) {
+        std::ostringstream line;
+        if (block.type == app::assistant_shell::AssistantShellMessageBlockType::UserText) line << "You: ";
+        else if (message.role == "assistant") line << "Assistant: ";
+        else line << "System: ";
+        line << block.text;
+        if (block.execution_summary.has_value()) {
+            line << "\r\n  Route: " << block.execution_summary->selected_route
+                 << " | Path: " << block.execution_summary->resolution_path
+                 << " | Confidence: " << block.execution_summary->confidence
+                 << " | Provider: " << (block.execution_summary->provider_used ? "yes" : "no");
+            if (!block.execution_summary->explanation.empty()) line << "\r\n  Why: " << block.execution_summary->explanation;
+        }
+        if (block.artifact_card.has_value()) {
+            line << "\r\n  " << block.artifact_card->title;
+            for (const auto& [label, value] : block.artifact_card->summary_fields) line << "\r\n    " << label << ": " << value;
+        }
+        if (block.confirmation_request.has_value()) {
+            line << "\r\n  Confirmation: " << block.confirmation_request->prompt;
+            pending_confirmation_ = block.confirmation_request;
+        }
+        transcript_lines_.push_back(line.str());
+    }
+    std::ostringstream combined;
+    for (std::size_t index = 0; index < transcript_lines_.size(); ++index) {
+        if (index > 0) combined << "\r\n\r\n";
+        combined << transcript_lines_[index];
+    }
+    transcript_.SetText(combined.str());
+}
+
+void AssistantShellWindow::UpdateStatus(const app::assistant_shell::AssistantShellStatusSnapshot& status_snapshot) {
+    status_.SetSnapshot(status_snapshot);
+}
+
+void AssistantShellWindow::UpdateToolPanel(const std::vector<app::assistant_shell::AssistantShellToolPanelSection>& sections) {
+    tool_panel_.SetSections(sections);
+}
+
+void AssistantShellWindow::UpdateConfirmationSurface() {
+    if (!pending_confirmation_.has_value()) {
+        confirmation_.SetText("No confirmation pending.");
+    } else {
+        confirmation_.SetText("Pending confirmation: " + pending_confirmation_->prompt);
+    }
+    Layout();
+}
+
+void AssistantShellWindow::SubmitComposer() {
+    const auto text = get_window_text_utf8(composer_edit_);
+    if (text.empty() || text == composer_placeholder_) return;
+    const auto result = controller_->SubmitUserText({session_id_, text});
+    transcript_lines_.push_back("You: " + text);
+    for (const auto& message : result.appended_messages) AppendMessage(message);
+    pending_confirmation_ = result.pending_confirmation;
+    UpdateStatus(result.status);
+    UpdateToolPanel(result.tool_panel_sections);
+    UpdateConfirmationSurface();
+    SetWindowTextW(composer_edit_, L"");
+    SetFocus(composer_edit_);
+}
+
+void AssistantShellWindow::ResolveConfirmation(bool accepted) {
+    if (!pending_confirmation_.has_value()) return;
+    const auto confirmation = controller_->ResolveConfirmation(session_id_, pending_confirmation_->confirmation_id, accepted);
+    transcript_lines_.push_back(std::string{"Assistant: "} + confirmation.assistant_message);
+    transcript_.SetText([&] {
+        std::ostringstream combined;
+        for (std::size_t index = 0; index < transcript_lines_.size(); ++index) {
+            if (index > 0) combined << "\r\n\r\n";
+            combined << transcript_lines_[index];
+        }
+        return combined.str();
+    }());
+    pending_confirmation_.reset();
+    UpdateConfirmationSurface();
+    if (const auto status = controller_->LoadLastStatus(session_id_); status.has_value()) UpdateStatus(*status);
+    UpdateToolPanel(controller_->ListSessions().empty() ? std::vector<app::assistant_shell::AssistantShellToolPanelSection>{} : controller_->Start(session_id_).tool_panel_sections);
+}
+
+void AssistantShellWindow::ToggleToolPanel() {
+    tool_panel_visible_ = !tool_panel_visible_;
+    SetWindowTextW(toggle_panel_button_, tool_panel_visible_ ? L"Hide Panel" : L"Show Panel");
+    Layout();
+}
+
+void AssistantShellWindow::ShowInfoDialog(const std::wstring& title, const std::string& body) const {
+    MessageBoxW(hwnd_, widen(body).c_str(), title.c_str(), MB_OK | MB_ICONINFORMATION);
+}
+
+void AssistantShellWindow::OpenDeveloperLayer() {
+    OpenSiblingExecutable(L"life_orchestrator_admin_gui.exe", L"Developer Layer", "Opened the Developer Layer surface in a separate window.");
+}
+
+void AssistantShellWindow::OpenConsole() {
+    const auto app_path = sibling_executable_path(L"life_orchestrator_app.exe");
+    if (app_path.empty()) {
+        ShowInfoDialog(L"Console", "The operator console executable was not found next to the assistant shell binary.");
+        return;
+    }
+    std::wstring command = L"cmd.exe /K \"\"" + app_path + L"\" operator-console\"";
+    STARTUPINFOW startup{};
+    startup.cb = sizeof(startup);
+    PROCESS_INFORMATION process{};
+    std::wstring mutable_command = command;
+    const BOOL ok = CreateProcessW(nullptr, mutable_command.data(), nullptr, nullptr, FALSE, CREATE_NEW_CONSOLE, nullptr, nullptr, &startup, &process);
+    if (ok) {
+        CloseHandle(process.hThread);
+        CloseHandle(process.hProcess);
+        transcript_lines_.push_back("System: Opened the operator console in a separate terminal window.");
+        transcript_.SetText([&] { std::ostringstream s; for (std::size_t i = 0; i < transcript_lines_.size(); ++i) { if (i) s << "\r\n\r\n"; s << transcript_lines_[i]; } return s.str(); }());
+        return;
+    }
+    ShowInfoDialog(L"Console", "Failed to launch the operator console path.");
+}
+
+void AssistantShellWindow::OpenProviderConfiguration() {
+    OpenSiblingExecutable(L"life_orchestrator_admin_gui.exe", L"API Keys", "Opened the provider configuration surface through the Developer Layer window.");
+}
+
+void AssistantShellWindow::ShowActiveModules() {
+    const auto result = controller_->RunCommand({"list-modules"});
+    ShowInfoDialog(L"Active Modules", result.standard_output.empty() ? result.standard_error : result.standard_output);
+}
+
+void AssistantShellWindow::ShowActiveInterfaces() {
+    std::ostringstream body;
+    const auto providers = controller_->RunCommand({"integration-list-providers"});
+    const auto status = controller_->RunCommand({"status"});
+    body << "Configured provider/interfaces\r\n-----------------------------\r\n" << (providers.standard_output.empty() ? providers.standard_error : providers.standard_output)
+         << "\r\nRuntime snapshot\r\n-----------------------------\r\n" << (status.standard_output.empty() ? status.standard_error : status.standard_output);
+    ShowInfoDialog(L"Active Interfaces", body.str());
+}
+
+void AssistantShellWindow::ShowHelp() {
+    const auto result = controller_->RunCommand({"help"});
+    ShowInfoDialog(L"Help", result.standard_output.empty() ? "Use exact commands, aliases, or the composer for guided routing." : result.standard_output);
+}
+
+void AssistantShellWindow::ShowSettings() {
+    ShowInfoDialog(L"Settings", "Settings is intentionally minimal in this checkpoint. Use the status snapshot and Developer Layer while the settings surface is expanded.");
+}
+
+std::wstring AssistantShellWindow::sibling_executable_path(const wchar_t* executable_name) const {
+    wchar_t buffer[MAX_PATH]{};
+    GetModuleFileNameW(nullptr, buffer, MAX_PATH);
+    std::filesystem::path path{buffer};
+    return (path.parent_path() / executable_name).wstring();
+}
+
+void AssistantShellWindow::OpenSiblingExecutable(const wchar_t* executable_name, const wchar_t* title, const std::string& success_message) {
+    const auto path = sibling_executable_path(executable_name);
+    const HINSTANCE launched = ShellExecuteW(hwnd_, L"open", path.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
+    if (reinterpret_cast<intptr_t>(launched) <= 32) {
+        ShowInfoDialog(title, "The requested surface could not be launched from the current build output directory.");
+        return;
+    }
+    transcript_lines_.push_back("System: " + success_message);
+    transcript_.SetText([&] { std::ostringstream s; for (std::size_t i = 0; i < transcript_lines_.size(); ++i) { if (i) s << "\r\n\r\n"; s << transcript_lines_[i]; } return s.str(); }());
+}
+
 }  // namespace life_orchestrator::ui::assistant_shell
 #endif
