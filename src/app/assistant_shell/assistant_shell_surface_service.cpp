@@ -265,6 +265,14 @@ std::optional<AssistantShellStatusSnapshot> AssistantShellSurfaceService::LoadLa
     return status;
 }
 
+
+life_orchestrator::app::ApplicationInvocationResult AssistantShellSurfaceService::RunCommand(const std::vector<std::string>& args) const {
+    auto forwarded = args;
+    forwarded.push_back("--data-root=" + data_root_.string());
+    forwarded.push_back("--quiet-startup");
+    return invoke_application_command(forwarded, environment_data_root_, working_root_);
+}
+
 AssistantShellStartupSnapshot AssistantShellSurfaceService::StartOrResumeSession(const std::optional<std::string>& session_id) {
     const auto id = session_id.value_or(next_session_id());
     auto summary = make_session_summary(id);
