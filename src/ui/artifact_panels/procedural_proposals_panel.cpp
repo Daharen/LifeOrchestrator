@@ -2,7 +2,6 @@
 
 namespace life_orchestrator::ui {
 
-ProceduralProposalsPanel::ProceduralProposalsPanel()
-    : ArtifactPanel("procedural_proposals_panel", "Procedural Proposals", "procedural_proposals", {{"Run Procedural Audit", {"procedural-run-audit"}}, {"Create Activity", {"procedural-upsert-activity", "--help"}}}) {}
+ProceduralProposalsPanel::ProceduralProposalsPanel() : ArtifactPanel("procedural_proposals") {}
 
 }  // namespace life_orchestrator::ui

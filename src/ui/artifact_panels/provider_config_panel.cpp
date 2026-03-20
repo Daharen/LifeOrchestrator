@@ -2,7 +2,6 @@
 
 namespace life_orchestrator::ui {
 
-ProviderConfigPanel::ProviderConfigPanel()
-    : ArtifactPanel("provider_config_panel", "Provider Config", "provider_config_summary", {{"Update Provider", {"integration-set-provider"}}}) {}
+ProviderConfigPanel::ProviderConfigPanel() : ArtifactPanel("provider_config_summary") {}
 
 }  // namespace life_orchestrator::ui

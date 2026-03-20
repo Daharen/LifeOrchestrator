@@ -2,7 +2,6 @@
 
 namespace life_orchestrator::ui {
 
-BehavioralReevaluationsPanel::BehavioralReevaluationsPanel()
-    : ArtifactPanel("behavioral_reevaluations_panel", "Behavioral Reevaluations", "behavioral_reevaluations", {}) {}
+BehavioralReevaluationsPanel::BehavioralReevaluationsPanel() : ArtifactPanel("behavioral_reevaluations") {}
 
 }  // namespace life_orchestrator::ui

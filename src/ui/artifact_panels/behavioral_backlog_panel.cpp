@@ -2,7 +2,6 @@
 
 namespace life_orchestrator::ui {
 
-BehavioralBacklogPanel::BehavioralBacklogPanel()
-    : ArtifactPanel("behavioral_backlog_panel", "Behavioral Backlog", "behavioral_backlog", {{"Reevaluate Backlog", {"behavioral-reevaluate-backlog"}}}) {}
+BehavioralBacklogPanel::BehavioralBacklogPanel() : ArtifactPanel("behavioral_backlog") {}
 
 }  // namespace life_orchestrator::ui

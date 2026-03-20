@@ -2,7 +2,6 @@
 
 namespace life_orchestrator::ui {
 
-ActivityInventoryPanel::ActivityInventoryPanel()
-    : ArtifactPanel("activity_inventory_panel", "Activity Inventory", "activity_inventory", {}) {}
+ActivityInventoryPanel::ActivityInventoryPanel() : ArtifactPanel("activity_inventory") {}
 
 }  // namespace life_orchestrator::ui

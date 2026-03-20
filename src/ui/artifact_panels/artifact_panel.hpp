@@ -1,5 +1,7 @@
 #pragma once
 
+#include "app/app_support/action_form_registry.hpp"
+#include "app/app_support/artifact_presentation_registry.hpp"
 #include "app/application_bootstrap.hpp"
 #include "ui/artifact_renderer.hpp"
 
@@ -10,22 +12,21 @@
 namespace life_orchestrator::ui {
 
 struct CommandInvocation {
+    std::string action_id;
     std::string button_label;
     std::vector<std::string> command_args;
 };
 
 class ArtifactPanel {
 public:
-    ArtifactPanel(std::string panel_id,
-                  std::string title,
-                  std::string artifact_type,
-                  std::vector<CommandInvocation> actions = {});
+    explicit ArtifactPanel(std::string artifact_type);
     virtual ~ArtifactPanel() = default;
 
-    const std::string& panel_id() const;
-    const std::string& title() const;
+    std::string panel_id() const;
+    std::string title() const;
     const std::string& artifact_type() const;
     const std::vector<CommandInvocation>& actions() const;
+    const app::ArtifactPresentationSchema& schema() const;
 
     std::vector<ArtifactRenderModel> load(const std::string& environment_data_root,
                                           const std::filesystem::path& working_root,
@@ -35,9 +36,7 @@ protected:
     std::vector<std::string> query_command_args(std::optional<std::size_t> limit) const;
 
 private:
-    std::string panel_id_;
-    std::string title_;
-    std::string artifact_type_;
+    app::ArtifactPresentationSchema schema_;
     std::vector<CommandInvocation> actions_;
 };
 
