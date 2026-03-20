@@ -13,6 +13,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <numeric>
 #include <sstream>
 #include <stdexcept>
 #include <vector>
@@ -851,6 +852,65 @@ void test_command_surface_aliases_help_and_discoverability() {
 }
 
 
+
+void test_supported_quick_actions_have_stable_ordered_fields() {
+    struct OrderedFieldExpectation {
+        std::string action_id;
+        std::vector<std::string> ordered_field_ids;
+    };
+    const std::vector<OrderedFieldExpectation> expectations = {
+        {"create_activity", {"activity_inventory_item_id", "title", "domain_source", "frequency", "duration_minutes", "effort_estimate", "outcome_value", "repeatable", "attributes_json", "now"}},
+        {"record_behavioral_state", {"available_capacity", "stress_level", "cognitive_load", "motivation", "recovery_status", "sleep_quality", "time_pressure", "notes", "attributes_json", "now"}},
+        {"run_procedural_audit", {"procedural_audit_run_id", "now"}},
+        {"generate_scheduling_candidates", {"now"}},
+        {"generate_schedule_proposals", {"now"}},
+    };
+
+    for (const auto& expectation : expectations) {
+        const auto spec = life_orchestrator::app::find_action_form_spec_by_id(expectation.action_id);
+        assert_true(spec.has_value(), "supported quick action should resolve to action form spec");
+        assert_true(spec->input_fields.size() == expectation.ordered_field_ids.size(), "supported quick action should expose stable field count");
+        for (std::size_t index = 0; index < expectation.ordered_field_ids.size(); ++index) {
+            assert_true(spec->input_fields[index].field_id == expectation.ordered_field_ids[index], "supported quick action should preserve stable ordered fields");
+        }
+    }
+}
+
+void test_action_form_submission_uses_registry_flag_names() {
+    const auto create_spec = life_orchestrator::app::find_action_form_spec_by_id("create_activity");
+    assert_true(create_spec.has_value(), "create activity spec should exist for submission tests");
+    const auto create_submission = life_orchestrator::app::build_action_form_submission_args(
+        *create_spec,
+        {{"activity_inventory_item_id", "activity.gui"},
+         {"title", "GUI activity"},
+         {"domain_source", "planning"},
+         {"frequency", "daily"},
+         {"duration_minutes", "30"},
+         {"effort_estimate", "4"},
+         {"outcome_value", "6"},
+         {"repeatable", "1"}});
+    assert_true(create_submission.empty_required_field_ids.empty(), "submission should not mark required values missing when all required values are present");
+    assert_in_order(std::accumulate(create_submission.args.begin(), create_submission.args.end(), std::string{}, [](std::string out, const std::string& value) {
+                        if (!out.empty()) out += ' ';
+                        out += value;
+                        return out;
+                    }),
+                    {"procedural-upsert-activity", "--activity-id", "activity.gui", "--effort-estimate", "4", "--repeatable", "1"},
+                    "submission should use canonical registry flag ordering");
+
+    const auto behavioral_spec = life_orchestrator::app::find_action_form_spec_by_id("record_behavioral_state");
+    assert_true(behavioral_spec.has_value(), "behavioral state spec should exist for submission tests");
+    const auto behavioral_submission = life_orchestrator::app::build_action_form_submission_args(
+        *behavioral_spec,
+        {{"available_capacity", "8"},
+         {"stress_level", "2"},
+         {"cognitive_load", "3"},
+         {"motivation", "7"},
+         {"recovery_status", "8"}});
+    assert_true(std::find(behavioral_submission.args.begin(), behavioral_submission.args.end(), "--motivation-level") != behavioral_submission.args.end(), "submission should prefer canonical motivation flag from registry");
+    assert_true(std::find(behavioral_submission.args.begin(), behavioral_submission.args.end(), "--motivation") == behavioral_submission.args.end(), "submission should not fall back to alternate flag when canonical registry flag is available");
+}
+
 void test_artifact_presentation_and_action_form_registries() {
     const std::vector<std::string> expected_artifacts = {"activity_inventory", "procedural_proposals", "behavioral_backlog", "behavioral_interventions", "scheduling_candidates", "schedule_proposals", "behavioral_reevaluations", "provider_config_summary"};
     for (const auto& artifact_type : expected_artifacts) {
@@ -1088,6 +1148,8 @@ int main() {
         test_operator_alias_resolution_and_suggestions();
         test_application_command_helper_exports();
         test_command_surface_aliases_help_and_discoverability();
+        test_supported_quick_actions_have_stable_ordered_fields();
+        test_action_form_submission_uses_registry_flag_names();
         test_artifact_presentation_and_action_form_registries();
         test_gui_panels_and_quick_actions_source_registry_labels();
         test_command_help_and_action_form_consistency();
