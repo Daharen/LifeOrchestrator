@@ -1,4 +1,6 @@
 #include "app/app_support/action_form_registry.hpp"
+#include "app/assistant_shell/assistant_shell_surface_service.h"
+#include "app/assistant_shell/assistant_shell_surface_contracts.h"
 #include "app/app_support/action_result_view.hpp"
 #include "app/app_support/artifact_presentation_registry.hpp"
 #include "app/application_bootstrap.hpp"
@@ -1269,6 +1271,104 @@ void test_operator_query_provider_and_status_visibility() {
     assert_true(status_out.str().find("configured_provider_count=1") != std::string::npos, "status should expose configured provider count");
 }
 
+
+void test_assistant_shell_surface_contract_strings() {
+    using namespace life_orchestrator::app::assistant_shell;
+    assert_true(to_string(AssistantShellMessageBlockType::ExecutionSummary) == "execution_summary", "contract string conversion should be stable");
+    assert_true(to_string(AssistantShellSessionMode::Extended) == "extended", "session mode string conversion should be stable");
+}
+
+void test_assistant_shell_submission_routing_precedence() {
+    namespace shell = life_orchestrator::app::assistant_shell;
+    const std::filesystem::path root = "artifacts/assistant_shell_precedence";
+    std::filesystem::remove_all(root);
+    shell::AssistantShellSurfaceService service(root, std::filesystem::current_path(), "");
+    const auto startup = service.StartOrResumeSession("session-precedence");
+    assert_true(!startup.initial_messages.empty(), "assistant shell startup should include deterministic greeting");
+
+    const auto result = service.SubmitUserText({"session-precedence", "backlog"});
+    assert_true(result.ok, "exact alias resolution should succeed without provider");
+    assert_true(!result.appended_messages.empty(), "submission should append assistant response");
+    bool saw_summary = false;
+    for (const auto& block : result.appended_messages.front().blocks) {
+        if (block.execution_summary.has_value()) {
+            saw_summary = true;
+            assert_true(block.execution_summary->resolution_path == "exact_command_resolution", "exact alias should resolve before intent routing");
+            assert_true(!block.execution_summary->provider_used, "exact alias resolution should not depend on provider state");
+        }
+    }
+    assert_true(saw_summary, "exact resolution should expose safe execution summary block");
+}
+
+void test_assistant_shell_confirmation_generation_and_acceptance() {
+    namespace shell = life_orchestrator::app::assistant_shell;
+    const std::filesystem::path root = "artifacts/assistant_shell_confirmation";
+    std::filesystem::remove_all(root);
+    std::ostringstream set_out;
+    std::ostringstream set_err;
+    auto rc = life_orchestrator::app::run_application({"integration-set-provider", "--data-root=" + root.string(), "--quiet-startup", "--provider-name", "openai", "--api-key", "TEST_KEY_123", "--model-name", "gpt-5"}, set_out, set_err, "", std::filesystem::current_path());
+    assert_true(rc == 0, "provider should configure for assistant shell confirmation test");
+
+    shell::AssistantShellSurfaceService service(root, std::filesystem::current_path(), "");
+    service.StartOrResumeSession("session-confirmation");
+    const auto result = service.SubmitUserText({"session-confirmation", "update the provider api key"});
+    assert_true(result.pending_confirmation.has_value(), "medium/high-risk interpreted actions should render inline confirmations");
+    assert_true(result.status.pending_confirmation_count == 1, "status should expose pending confirmation count");
+
+    const auto confirmation = service.ResolveConfirmation("session-confirmation", result.pending_confirmation->confirmation_id, true);
+    assert_true(confirmation.accepted, "accepting confirmation should succeed");
+    assert_true(confirmation.execution_summary.has_value() && confirmation.execution_summary->resolution_path == "confirmation_resolution", "confirmation acceptance should preserve authoritative execution lineage");
+}
+
+void test_assistant_shell_no_provider_remediation_and_redaction() {
+    namespace shell = life_orchestrator::app::assistant_shell;
+    const std::filesystem::path root = "artifacts/assistant_shell_no_provider";
+    std::filesystem::remove_all(root);
+    shell::AssistantShellSurfaceService service(root, std::filesystem::current_path(), "");
+    service.StartOrResumeSession("session-no-provider");
+    const auto result = service.SubmitUserText({"session-no-provider", "plan my week"});
+    assert_true(result.ok, "no-provider remediation should still return a friendly assistant response");
+    bool saw_remediation = false;
+    for (const auto& block : result.appended_messages.front().blocks) {
+        if (block.type == shell::AssistantShellMessageBlockType::AssistantResponse && block.text.find("Configure a provider") != std::string::npos) saw_remediation = true;
+    }
+    assert_true(saw_remediation, "no-provider requests should emit remediation guidance");
+
+    std::ostringstream set_out;
+    std::ostringstream set_err;
+    auto rc = life_orchestrator::app::run_application({"integration-set-provider", "--data-root=" + root.string(), "--quiet-startup", "--provider-name", "openai", "--api-key", "TEST_KEY_123", "--model-name", "gpt-5"}, set_out, set_err, "", std::filesystem::current_path());
+    assert_true(rc == 0, "provider should configure for redaction visibility test");
+    const auto provider_result = service.SubmitUserText({"session-no-provider", "integration-list-providers"});
+    bool saw_redacted_card = false;
+    for (const auto& block : provider_result.appended_messages.front().blocks) {
+        if (block.artifact_card.has_value()) {
+            for (const auto& [label, value] : block.artifact_card->summary_fields) {
+                if (label == "API Key" && value.find("***") != std::string::npos) saw_redacted_card = true;
+                assert_true(value.find("TEST_KEY_123") == std::string::npos, "shell-visible provider metadata must remain redacted");
+            }
+        }
+    }
+    assert_true(saw_redacted_card, "provider artifact card should preserve secret redaction");
+}
+
+void test_assistant_shell_session_persistence_and_reload() {
+    namespace shell = life_orchestrator::app::assistant_shell;
+    const std::filesystem::path root = "artifacts/assistant_shell_persistence";
+    std::filesystem::remove_all(root);
+    shell::AssistantShellSurfaceService service(root, std::filesystem::current_path(), "");
+    service.StartOrResumeSession("session-persist");
+    service.SubmitUserText({"session-persist", "status"});
+    const auto sessions = service.ListSessions();
+    assert_true(!sessions.empty(), "historical chats should list persisted sessions");
+    assert_true(sessions.front().session_id == "session-persist", "persisted session should be discoverable by id");
+
+    shell::AssistantShellSurfaceService reloaded(root, std::filesystem::current_path(), "");
+    const auto resumed = reloaded.StartOrResumeSession("session-persist");
+    assert_true(resumed.initial_messages.size() >= 3, "reloaded session should preserve prior transcript messages");
+    const auto status = reloaded.LoadLastStatus("session-persist");
+    assert_true(status.has_value(), "reloaded session should preserve last known shell status snapshot");
+}
+
 }  // namespace
 
 int main() {
@@ -1304,6 +1404,11 @@ int main() {
         test_integration_provider_persistence_redaction_and_visibility();
         test_integration_set_provider_env_var_reference_mode();
         test_operator_query_provider_and_status_visibility();
+        test_assistant_shell_surface_contract_strings();
+        test_assistant_shell_submission_routing_precedence();
+        test_assistant_shell_confirmation_generation_and_acceptance();
+        test_assistant_shell_no_provider_remediation_and_redaction();
+        test_assistant_shell_session_persistence_and_reload();
     } catch (const std::exception& e) {
         std::cerr << "Test failure: " << e.what() << '\n';
         return 1;

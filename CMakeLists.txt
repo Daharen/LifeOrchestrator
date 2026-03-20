@@ -38,6 +38,8 @@ target_link_libraries(lifeorchestrator_control_plane PUBLIC lifeorchestrator_cor
 
 add_library(lifeorchestrator_app_support
     src/app/application_bootstrap.cpp
+    src/app/assistant_shell/assistant_shell_surface_contracts.cpp
+    src/app/assistant_shell/assistant_shell_surface_service.cpp
     src/intelligence/intent_router.cpp
     src/app/app_support/action_form_registry.cpp
     src/app/app_support/action_result_view.cpp
@@ -85,6 +87,27 @@ if(WIN32)
         RUNTIME_OUTPUT_DIRECTORY_MINSIZEREL "${CMAKE_BINARY_DIR}/MinSizeRel"
     )
     target_link_libraries(life_orchestrator_admin_gui PRIVATE lifeorchestrator_app_support user32 gdi32 comctl32)
+endif()
+
+if(WIN32)
+    add_executable(life_orchestrator_assistant_shell WIN32
+        src/ui/assistant_shell/assistant_shell_main.cpp
+        src/ui/assistant_shell/assistant_shell_window.cpp
+        src/ui/assistant_shell/assistant_shell_controller.cpp
+        src/ui/assistant_shell/assistant_shell_view_models.cpp
+        src/ui/assistant_shell/assistant_shell_tool_panel.cpp
+        src/ui/assistant_shell/assistant_shell_confirmation_surface.cpp
+        src/ui/assistant_shell/assistant_shell_message_surface.cpp
+        src/ui/assistant_shell/assistant_shell_status_bar.cpp
+    )
+    set_target_properties(life_orchestrator_assistant_shell PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}"
+        RUNTIME_OUTPUT_DIRECTORY_DEBUG "${CMAKE_BINARY_DIR}/Debug"
+        RUNTIME_OUTPUT_DIRECTORY_RELEASE "${CMAKE_BINARY_DIR}/Release"
+        RUNTIME_OUTPUT_DIRECTORY_RELWITHDEBINFO "${CMAKE_BINARY_DIR}/RelWithDebInfo"
+        RUNTIME_OUTPUT_DIRECTORY_MINSIZEREL "${CMAKE_BINARY_DIR}/MinSizeRel"
+    )
+    target_link_libraries(life_orchestrator_assistant_shell PRIVATE lifeorchestrator_app_support user32 gdi32 comctl32)
 endif()
 
 add_executable(control_plane_smoke src/control_plane/smoke_main.cpp)

@@ -64,6 +64,20 @@ elseif ($args.Count -gt 0) {
             $RunArgs = @()
         }
     }
+    elseif ($firstArg -eq 'assistant' -or $firstArg -eq 'assistant-shell' -or $firstArg -eq 'shell') {
+        if (-not $isWindowsHost) {
+            Write-Error 'life_orchestrator_assistant_shell is only available on Windows.'
+            exit 1
+        }
+
+        $Target = 'life_orchestrator_assistant_shell'
+        if ($args.Count -gt 1) {
+            $RunArgs = $args[1..($args.Count - 1)]
+        }
+        else {
+            $RunArgs = @()
+        }
+    }
     elseif ($firstArg -eq 'cli' -or $firstArg -eq 'headless' -or $firstArg -eq 'app') {
         $Target = 'life_orchestrator_app'
         if ($args.Count -gt 1) {
