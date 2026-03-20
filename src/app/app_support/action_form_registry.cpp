@@ -1,6 +1,8 @@
 #include "app/app_support/action_form_registry.hpp"
 
 #include <algorithm>
+#include <unordered_map>
+
 
 namespace life_orchestrator::app {
 namespace {
@@ -39,5 +41,27 @@ std::optional<ActionFormSpec> find_action_form_spec_by_command_target(const std:
     if (it == specs.end()) return std::nullopt;
     return *it;
 }
+
+ActionFormSubmissionBuildResult build_action_form_submission_args(const ActionFormSpec& spec,
+                                                                  const std::vector<ActionFormSubmissionField>& values) {
+    std::unordered_map<std::string, std::string> by_field_id;
+    for (const auto& value : values) by_field_id[value.field_id] = value.value;
+
+    ActionFormSubmissionBuildResult result;
+    result.args.push_back(spec.canonical_command_target);
+    for (const auto& field : spec.input_fields) {
+        const auto it = by_field_id.find(field.field_id);
+        const auto field_value = it == by_field_id.end() ? std::string{} : it->second;
+        if (field_value.empty()) {
+            if (field.required) result.empty_required_field_ids.push_back(field.field_id);
+            continue;
+        }
+        if (field.accepted_flags.empty()) continue;
+        result.args.push_back(field.accepted_flags.front());
+        result.args.push_back(field_value);
+    }
+    return result;
+}
+
 
 }  // namespace life_orchestrator::app

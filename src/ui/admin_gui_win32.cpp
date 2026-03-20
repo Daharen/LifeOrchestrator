@@ -18,6 +18,7 @@
 #include <cstdint>
 #include <cstdlib>
 #include <filesystem>
+#include <optional>
 #include <string>
 #include <utility>
 #include <vector>
@@ -39,6 +40,10 @@ constexpr int kControlRunCommandButton = 109;
 constexpr int kControlRefreshStatusButton = 110;
 constexpr int kControlOutputEdit = 111;
 constexpr int kControlStatusText = 112;
+constexpr int kDialogFirstFieldLabel = 2000;
+constexpr int kDialogFirstFieldEdit = 3000;
+constexpr int kDialogSubmitButton = 4000;
+constexpr int kDialogCancelButton = 4001;
 
 HMENU control_menu_id(const int value) {
     return reinterpret_cast<HMENU>(static_cast<intptr_t>(value));
@@ -49,7 +54,22 @@ struct QuickCommand {
     std::vector<std::string> args;
 };
 
+struct ActionDialogFieldControl {
+    life_orchestrator::app::ActionFormFieldSpec field;
+    HWND label = nullptr;
+    HWND edit = nullptr;
+    HWND help = nullptr;
+};
+
+struct ActionDialogState {
+    life_orchestrator::app::ActionFormSpec spec;
+    std::vector<ActionDialogFieldControl> fields;
+    std::vector<std::string> submitted_args;
+    bool submitted = false;
+};
+
 std::wstring widen(const std::string& value);
+std::string get_control_text(HWND handle);
 
 const std::vector<QuickCommand>& quick_commands() {
     static const std::vector<QuickCommand> commands = [] {
@@ -98,6 +118,164 @@ void send_listbox_add_string(HWND handle, const std::wstring& value) {
 
 void send_combobox_add_string(HWND handle, const std::wstring& value) {
     SendMessageW(handle, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(value.c_str()));
+}
+
+
+
+std::wstring action_dialog_label_text(const life_orchestrator::app::ActionFormFieldSpec& field) {
+    auto label = field.label;
+    if (field.required) label += " *";
+    return widen(label);
+}
+
+std::wstring action_dialog_help_text(const life_orchestrator::app::ActionFormFieldSpec& field) {
+    std::string help = field.help_text;
+    if (!field.example_value.empty()) {
+        if (!help.empty()) help += " ";
+        help += "Example: " + field.example_value;
+    }
+    return widen(help);
+}
+
+void set_edit_placeholder(HWND handle, const std::wstring& value) {
+    SendMessageW(handle, EM_SETCUEBANNER, 0, reinterpret_cast<LPARAM>(value.c_str()));
+}
+
+void layout_action_dialog(HWND hwnd) {
+    auto* state = reinterpret_cast<ActionDialogState*>(GetWindowLongPtrW(hwnd, GWLP_USERDATA));
+    if (state == nullptr) return;
+
+    RECT client{};
+    GetClientRect(hwnd, &client);
+    const int margin = 12;
+    const int label_height = 20;
+    const int edit_height = 24;
+    const int help_height = 32;
+    const int field_gap = 8;
+    const int content_width = (client.right - client.left) - (margin * 2);
+    int y = margin;
+
+    for (auto& field : state->fields) {
+        MoveWindow(field.label, margin, y, content_width, label_height, TRUE);
+        y += label_height + 2;
+        MoveWindow(field.edit, margin, y, content_width, edit_height, TRUE);
+        y += edit_height + 2;
+        MoveWindow(field.help, margin, y, content_width, help_height, TRUE);
+        y += help_height + field_gap;
+    }
+
+    const int button_width = 120;
+    MoveWindow(GetDlgItem(hwnd, kDialogSubmitButton), client.right - margin - (button_width * 2) - 8, y, button_width, 28, TRUE);
+    MoveWindow(GetDlgItem(hwnd, kDialogCancelButton), client.right - margin - button_width, y, button_width, 28, TRUE);
+}
+
+LRESULT CALLBACK action_dialog_proc(HWND hwnd, UINT message, WPARAM w_param, LPARAM l_param) {
+    switch (message) {
+        case WM_NCCREATE: {
+            auto* create = reinterpret_cast<CREATESTRUCTW*>(l_param);
+            SetWindowLongPtrW(hwnd, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(create->lpCreateParams));
+            return TRUE;
+        }
+        case WM_CREATE: {
+            auto* state = reinterpret_cast<ActionDialogState*>(GetWindowLongPtrW(hwnd, GWLP_USERDATA));
+            if (state == nullptr) return -1;
+            state->fields.reserve(state->spec.input_fields.size());
+            for (std::size_t index = 0; index < state->spec.input_fields.size(); ++index) {
+                const auto& field = state->spec.input_fields[index];
+                auto label = CreateWindowExW(0, L"STATIC", action_dialog_label_text(field).c_str(), WS_CHILD | WS_VISIBLE, 0, 0, 0, 0, hwnd, control_menu_id(kDialogFirstFieldLabel + static_cast<int>(index)), nullptr, nullptr);
+                auto edit = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", L"", WS_CHILD | WS_VISIBLE | ES_AUTOHSCROLL, 0, 0, 0, 0, hwnd, control_menu_id(kDialogFirstFieldEdit + static_cast<int>(index)), nullptr, nullptr);
+                auto help = CreateWindowExW(0, L"STATIC", action_dialog_help_text(field).c_str(), WS_CHILD | WS_VISIBLE, 0, 0, 0, 0, hwnd, nullptr, nullptr, nullptr);
+                if (!field.example_value.empty()) set_edit_placeholder(edit, widen(field.example_value));
+                state->fields.push_back({field, label, edit, help});
+            }
+            CreateWindowExW(0, L"BUTTON", L"Submit", WS_CHILD | WS_VISIBLE | BS_DEFPUSHBUTTON, 0, 0, 0, 0, hwnd, control_menu_id(kDialogSubmitButton), nullptr, nullptr);
+            CreateWindowExW(0, L"BUTTON", L"Cancel", WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON, 0, 0, 0, 0, hwnd, control_menu_id(kDialogCancelButton), nullptr, nullptr);
+            layout_action_dialog(hwnd);
+            if (!state->fields.empty()) SetFocus(state->fields.front().edit);
+            return 0;
+        }
+        case WM_SIZE:
+            layout_action_dialog(hwnd);
+            return 0;
+        case WM_COMMAND: {
+            switch (LOWORD(w_param)) {
+                case kDialogSubmitButton: {
+                    auto* state = reinterpret_cast<ActionDialogState*>(GetWindowLongPtrW(hwnd, GWLP_USERDATA));
+                    if (state == nullptr) return 0;
+                    std::vector<life_orchestrator::app::ActionFormSubmissionField> values;
+                    values.reserve(state->fields.size());
+                    for (const auto& field : state->fields) values.push_back({field.field.field_id, get_control_text(field.edit)});
+                    const auto submission = life_orchestrator::app::build_action_form_submission_args(state->spec, values);
+                    state->submitted_args = submission.args;
+                    state->submitted = true;
+                    DestroyWindow(hwnd);
+                    return 0;
+                }
+                case kDialogCancelButton:
+                    DestroyWindow(hwnd);
+                    return 0;
+                default:
+                    break;
+            }
+            break;
+        }
+        case WM_CLOSE:
+            DestroyWindow(hwnd);
+            return 0;
+        case WM_DESTROY:
+            return 0;
+        default:
+            break;
+    }
+    return DefWindowProcW(hwnd, message, w_param, l_param);
+}
+
+std::optional<std::vector<std::string>> show_action_form_dialog(HWND owner, const life_orchestrator::app::ActionFormSpec& spec) {
+    static bool registered = false;
+    if (!registered) {
+        WNDCLASSEXW dialog_class{};
+        dialog_class.cbSize = sizeof(dialog_class);
+        dialog_class.lpfnWndProc = action_dialog_proc;
+        dialog_class.hInstance = reinterpret_cast<HINSTANCE>(GetWindowLongPtrW(owner, GWLP_HINSTANCE));
+        dialog_class.lpszClassName = L"LifeOrchestratorActionDialogWindow";
+        dialog_class.hCursor = LoadCursor(nullptr, IDC_ARROW);
+        dialog_class.hbrBackground = reinterpret_cast<HBRUSH>(COLOR_WINDOW + 1);
+        RegisterClassExW(&dialog_class);
+        registered = true;
+    }
+
+    ActionDialogState state{};
+    state.spec = spec;
+    HWND dialog = CreateWindowExW(WS_EX_DLGMODALFRAME,
+                                  L"LifeOrchestratorActionDialogWindow",
+                                  widen(spec.display_label).c_str(),
+                                  WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU,
+                                  CW_USEDEFAULT,
+                                  CW_USEDEFAULT,
+                                  520,
+                                  static_cast<int>(160 + (spec.input_fields.size() * 88)),
+                                  owner,
+                                  nullptr,
+                                  reinterpret_cast<HINSTANCE>(GetWindowLongPtrW(owner, GWLP_HINSTANCE)),
+                                  &state);
+    if (dialog == nullptr) return std::nullopt;
+
+    EnableWindow(owner, FALSE);
+    ShowWindow(dialog, SW_SHOW);
+    UpdateWindow(dialog);
+
+    MSG msg{};
+    while (IsWindow(dialog) && GetMessageW(&msg, nullptr, 0, 0) > 0) {
+        if (!IsDialogMessageW(dialog, &msg)) {
+            TranslateMessage(&msg);
+            DispatchMessageW(&msg);
+        }
+    }
+    EnableWindow(owner, TRUE);
+    SetActiveWindow(owner);
+
+    if (!state.submitted) return std::nullopt;
+    return state.submitted_args;
 }
 
 std::string get_control_text(HWND handle) {
@@ -308,9 +486,23 @@ LRESULT CALLBACK window_proc(HWND hwnd, UINT message, WPARAM w_param, LPARAM l_p
                     if (state == nullptr || state->quick_combo == nullptr) return 0;
 
                     const auto index = static_cast<int>(SendMessageW(state->quick_combo, CB_GETCURSEL, 0, 0));
-                    if (index >= 0 && index < static_cast<int>(quick_commands().size())) {
-                        execute_args(hwnd, quick_commands()[static_cast<std::size_t>(index)].args);
+                    if (index < 0 || index >= static_cast<int>(quick_commands().size())) return 0;
+
+                    const auto& quick = quick_commands()[static_cast<std::size_t>(index)];
+                    if (!quick.args.empty()) {
+                        const auto spec = life_orchestrator::app::find_action_form_spec_by_command_target(quick.args.front());
+                        if (spec.has_value()) {
+                            const auto submitted = show_action_form_dialog(hwnd, *spec);
+                            if (!submitted.has_value()) {
+                                set_status(hwnd, "Action dialog cancelled.");
+                                return 0;
+                            }
+                            execute_args(hwnd, *submitted);
+                            return 0;
+                        }
                     }
+
+                    execute_args(hwnd, quick.args);
                     return 0;
                 }
                 case kControlRunCommandButton:
