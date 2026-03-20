@@ -5,6 +5,16 @@
 
 namespace life_orchestrator::app {
 
+struct ActionFormFieldOptionSpec {
+    std::string value;
+    std::string label;
+};
+
+struct ActionFormFieldVisibilityRule {
+    std::string controlling_field_id;
+    std::string expected_value;
+};
+
 struct ActionFormFieldSpec {
     std::string field_id;
     std::string label;
@@ -12,6 +22,9 @@ struct ActionFormFieldSpec {
     bool required = false;
     std::string help_text;
     std::string example_value;
+    std::string input_kind = "text";
+    std::vector<ActionFormFieldOptionSpec> options;
+    std::vector<ActionFormFieldVisibilityRule> visibility_rules;
 };
 
 struct ActionFormSpec {

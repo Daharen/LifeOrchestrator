@@ -262,6 +262,11 @@ std::string read_secret_file(const std::filesystem::path& path) {
     std::getline(in, value);
     return value;
 }
+std::string read_env_var(const std::string& name) {
+    if (name.empty()) return {};
+    const char* value = std::getenv(name.c_str());
+    return value == nullptr ? std::string{} : std::string{value};
+}
 std::string redact_secret(const std::string& value) {
     if (value.empty()) return "unset";
     if (value.size() <= 4) return "****";
@@ -315,6 +320,23 @@ bool is_known_global_option(const std::string& value) {
     return starts_with(value, "--data-root=") || starts_with(value, "--timezone=") || starts_with(value, "--command=") || value == "--no-seed-data" || value == "--quiet-startup" || value == "--data-root" || value == "--timezone" || value == "--command";
 }
 
+bool is_provider_management_command(const std::string& value) {
+    return value == "integration-set-provider" || value == "integration-show-provider" || value == "integration-list-providers" || value == "integration-test-provider";
+}
+
+std::string normalize_smart_dashes_for_operator_input(const std::string& value) {
+    std::string out = value;
+    const std::vector<std::pair<std::string, std::string>> replacements = {{std::string("\xE2\x80\x94"), "--"}, {std::string("\xE2\x80\x93"), "--"}};
+    for (const auto& [from, to] : replacements) {
+        std::size_t pos = 0;
+        while ((pos = out.find(from, pos)) != std::string::npos) {
+            out.replace(pos, from.size(), to);
+            pos += to.size();
+        }
+    }
+    return out;
+}
+
 bool is_allowed_command_option(ApplicationRunMode mode, const std::string& key) {
     if (mode == ApplicationRunMode::ProceduralUpsertActivity) {
         static const std::vector<std::string> keys = {"activity-id", "title", "domain-source", "frequency", "duration-minutes", "effort", "effort-estimate", "outcome-value", "description", "necessity", "cognitive-load", "stress-load", "financial-cost", "attributes-json", "repeatable", "now", "help"};
@@ -329,13 +351,29 @@ bool is_allowed_command_option(ApplicationRunMode mode, const std::string& key) 
     }
     if (mode == ApplicationRunMode::BehavioralListInterventions) return key == "status" || key == "due-by" || key == "now";
     if (mode == ApplicationRunMode::BehavioralReevaluateBacklog) return key == "now" || key == "help";
-    if (mode == ApplicationRunMode::IntegrationSetProvider) return key == "provider-name" || key == "api-key" || key == "model-name";
+    if (mode == ApplicationRunMode::IntegrationSetProvider) return key == "provider-name" || key == "api-key" || key == "model-name" || key == "secret-source" || key == "env-var" || key == "secret-ref";
     if (mode == ApplicationRunMode::IntegrationShowProvider) return key == "provider-name";
     if (mode == ApplicationRunMode::IntegrationTestProvider) return key == "provider-name";
     if (mode == ApplicationRunMode::ArtifactQuery) return key == "artifact-type" || key == "limit";
     if (mode == ApplicationRunMode::OperatorQuery) return key == "input" || key == "help";
     if (mode == ApplicationRunMode::Suggest) return key == "input" || key == "help";
     return key == "now" || key == "help";
+}
+
+
+
+bool tokens_match_explicit_command(ApplicationRunMode mode, const std::vector<std::string>& tokens) {
+    for (std::size_t index = 1; index < tokens.size(); ++index) {
+        const auto& token = tokens[index];
+        if (is_known_global_option(token)) continue;
+        if (!starts_with(token, "--")) return false;
+        auto option = token.substr(2);
+        auto value = value_after_equals(option);
+        if (!value.empty()) option = option.substr(0, option.find('='));
+        if (!is_allowed_command_option(mode, option)) return false;
+        if (value.empty() && index + 1 < tokens.size() && !starts_with(tokens[index + 1], "--")) ++index;
+    }
+    return true;
 }
 
 std::string normalize_command_option_key(const std::string& key) {
@@ -359,6 +397,9 @@ std::string normalize_command_option_key(const std::string& key) {
     if (key == "provider-name") return "provider_name";
     if (key == "api-key") return "api_key";
     if (key == "model-name") return "model_name";
+    if (key == "secret-source") return "secret_source";
+    if (key == "env-var") return "env_var_name";
+    if (key == "secret-ref") return "existing_secret_reference";
     if (key == "artifact-type") return "artifact_type";
     return key;
 }
@@ -741,24 +782,36 @@ ApplicationExitCode execute_command(ApplicationRuntime& runtime,
         return runtime.integration_repository.get_by_id(provider_config_id_for_name(provider_name));
     };
 
+    auto provider_secret_status = [&](const core::IntegrationConfigurationRecord& record) -> std::pair<std::string, std::string> {
+        if (record.credential_storage_mode == core::CredentialStorageMode::InlinePlaceholderOnly) {
+            const auto env_var_name = record.non_secret_settings.contains("env_var_name") ? record.non_secret_settings.at("env_var_name") : record.credential_reference;
+            return {read_env_var(env_var_name), env_var_name.empty() ? std::string{"missing_env_var_reference"} : std::string{"env:"} + env_var_name};
+        }
+        const auto reference = record.credential_reference.empty() && record.non_secret_settings.contains("existing_secret_reference")
+                                   ? record.non_secret_settings.at("existing_secret_reference")
+                                   : record.credential_reference;
+        return {read_secret_file(runtime.config.data_root_path / reference), reference};
+    };
+
     auto emit_provider_record = [&](const core::IntegrationConfigurationRecord& record) {
-        const auto secret = read_secret_file(runtime.config.data_root_path / record.credential_reference);
+        const auto [secret, reference] = provider_secret_status(record);
         output << "provider_name=" << record.integration_id << '\n'
                << "display_name=" << record.display_name << '\n'
                << "enabled=" << (record.enabled ? "true" : "false") << '\n'
                << "status=" << core::to_string(record.status) << '\n'
                << "model_name=" << default_if_empty(record.non_secret_settings.contains("model_name") ? record.non_secret_settings.at("model_name") : std::string{}, "unset") << '\n'
+               << "secret_source=" << default_if_empty(record.non_secret_settings.contains("secret_source") ? record.non_secret_settings.at("secret_source") : std::string{}, record.credential_storage_mode == core::CredentialStorageMode::InlinePlaceholderOnly ? "env" : "direct") << '\n'
+               << "env_var_name=" << default_if_empty(record.non_secret_settings.contains("env_var_name") ? record.non_secret_settings.at("env_var_name") : std::string{}, "unset") << '\n'
                << "credential_storage_mode=" << core::to_string(record.credential_storage_mode) << '\n'
-               << "credential_reference=" << record.credential_reference << '\n'
+               << "credential_reference=" << reference << '\n'
                << "api_key_redacted=" << redact_secret(secret) << '\n'
                << "updated_at=" << record.updated_at << '\n'
                << "version=" << record.version << '\n';
     };
 
     auto run_stubbed_provider_request = [&](const core::IntegrationConfigurationRecord& record, const std::string& input) -> std::pair<bool, std::string> {
-        const auto secret_path = runtime.config.data_root_path / record.credential_reference;
-        const auto api_key = read_secret_file(secret_path);
-        if (api_key.empty()) return {false, "provider_not_ready=missing_api_key"};
+        const auto [api_key, secret_reference] = provider_secret_status(record);
+        if (api_key.empty()) return {false, std::string{"provider_not_ready=missing_api_key source="} + secret_reference};
         const auto model_name = record.non_secret_settings.contains("model_name") ? record.non_secret_settings.at("model_name") : std::string{"unset"};
         if (starts_with(api_key, "TEST_") || starts_with(api_key, "TEST") || record.integration_id == "stub") {
             const auto request_only = [&]() {
@@ -779,21 +832,22 @@ ApplicationExitCode execute_command(ApplicationRuntime& runtime,
 
     auto resolve_operator_input = [&](const std::string& raw_input, std::ostream& routed_output, std::ostream& routed_error) -> ApplicationExitCode {
         const auto input = trim_copy(raw_input);
+        const auto normalized_input = normalize_smart_dashes_for_operator_input(input);
         if (input.empty()) {
             routed_error << "operator_query=failed\nmessage=empty_input\n";
             return ApplicationExitCode::CommandValidationFailure;
         }
         routed_output << "operator_input_raw=" << input << '\n';
-        const auto tokens = split_console_input(input);
+        routed_output << "operator_input_normalized=" << normalized_input << '\n';
+        const auto tokens = split_console_input(normalized_input);
         if (!tokens.empty()) {
             const auto exact = tokens.front();
             const auto alias = resolve_alias(exact);
-            const bool command_like_tail = std::all_of(tokens.begin() + 1,
-                                                       tokens.end(),
-                                                       [](const std::string& token) { return !token.empty() && (token[0] == '-' || token.find('=') != std::string::npos); });
-            if ((is_command_name(exact) || alias.has_value()) && (tokens.size() == 1 || command_like_tail)) {
+            const auto canonical = alias.value_or(exact);
+            const auto exact_mode = parse_run_mode(canonical);
+            if ((is_command_name(exact) || alias.has_value()) && tokens_match_explicit_command(exact_mode, tokens)) {
                 std::vector<std::string> forwarded;
-                forwarded.push_back(alias.value_or(exact));
+                forwarded.push_back(canonical);
                 for (std::size_t i = 1; i < tokens.size(); ++i) forwarded.push_back(tokens[i]);
                 forwarded.push_back("--data-root=" + runtime.config.data_root_path.string());
                 forwarded.push_back("--quiet-startup");
@@ -804,13 +858,13 @@ ApplicationExitCode execute_command(ApplicationRuntime& runtime,
 
         const auto providers = runtime.integration_repository.list_all();
         if (providers.empty()) {
-            routed_error << "operator_query=failed\nmessage=no_provider_configured\n";
+            routed_error << "operator_query=failed\nmessage=no_provider_configured\nremediation_action=update_provider_configuration\nremediation_command=integration-set-provider\nremediation_prompt=No provider is configured yet. Open Configure Provider and choose a provider, model, and secret source to continue.\n";
             return ApplicationExitCode::RuntimeOperationFailure;
         }
         const auto& provider = providers.front();
         const auto context = build_intent_command_context(command_names(), alias_table(), list_action_form_specs());
         const auto closest = closest_command_names(input);
-        const auto route = route_with_provider(input,
+        const auto route = route_with_provider(normalized_input,
                                                context,
                                                closest,
                                                [&](const std::string& prompt) {
@@ -1323,18 +1377,51 @@ ApplicationExitCode execute_command(ApplicationRuntime& runtime,
             return complete(ApplicationExitCode::Success, "Procedural audit run listing completed.");
         }
         case ApplicationRunMode::IntegrationSetProvider: {
-            static const std::vector<std::string> required = {"provider_name", "api_key", "model_name"};
+            static const std::vector<std::string> required = {"provider_name", "model_name"};
             for (const auto& key : required) {
                 if (!runtime.config.command_parameters.contains(key) || runtime.config.command_parameters.at(key).empty()) {
                     error << "integration_set_provider=failed\nmessage=missing_" << key << '\n';
                     return complete(ApplicationExitCode::CommandValidationFailure, "Missing required argument: " + key);
                 }
             }
+            const auto secret_source = runtime.config.command_parameters.contains("secret_source") ? runtime.config.command_parameters.at("secret_source") : (runtime.config.command_parameters.contains("env_var_name") ? std::string{"env"} : std::string{"direct"});
+            if (secret_source == "direct" && (!runtime.config.command_parameters.contains("api_key") || runtime.config.command_parameters.at("api_key").empty())) {
+                error << "integration_set_provider=failed\nmessage=missing_api_key\n";
+                return complete(ApplicationExitCode::CommandValidationFailure, "Missing required argument: api_key");
+            }
+            if (secret_source == "env" && (!runtime.config.command_parameters.contains("env_var_name") || runtime.config.command_parameters.at("env_var_name").empty())) {
+                error << "integration_set_provider=failed\nmessage=missing_env_var_name\n";
+                return complete(ApplicationExitCode::CommandValidationFailure, "Missing required argument: env_var_name");
+            }
+            if (secret_source == "existing" && (!runtime.config.command_parameters.contains("existing_secret_reference") || runtime.config.command_parameters.at("existing_secret_reference").empty())) {
+                error << "integration_set_provider=failed\nmessage=missing_existing_secret_reference\n";
+                return complete(ApplicationExitCode::CommandValidationFailure, "Missing required argument: existing_secret_reference");
+            }
             const auto now = core::current_timestamp_utc();
             const auto provider_name = sanitize_for_storage(runtime.config.command_parameters.at("provider_name"));
-            const auto secret_relative = std::filesystem::relative(provider_secret_path(runtime.config.data_root_path, provider_name), runtime.config.data_root_path).string();
-            write_secret_file(provider_secret_path(runtime.config.data_root_path, provider_name), runtime.config.command_parameters.at("api_key"));
             auto existing = find_provider_record(provider_name);
+            auto credential_storage_mode = core::CredentialStorageMode::ExternalSecretReference;
+            auto credential_reference = std::string{};
+            auto redacted_secret = std::string{"unset"};
+            auto non_secret_settings = core::StringMap{{"model_name", sanitize_for_storage(runtime.config.command_parameters.at("model_name"))},
+                                                       {"secret_source", secret_source}};
+            if (secret_source == "env") {
+                credential_storage_mode = core::CredentialStorageMode::InlinePlaceholderOnly;
+                credential_reference = sanitize_for_storage(runtime.config.command_parameters.at("env_var_name"));
+                non_secret_settings["env_var_name"] = credential_reference;
+                redacted_secret = redact_secret(read_env_var(credential_reference));
+            } else {
+                credential_storage_mode = core::CredentialStorageMode::ExternalSecretReference;
+                if (secret_source == "existing") {
+                    credential_reference = sanitize_for_storage(runtime.config.command_parameters.at("existing_secret_reference"));
+                    non_secret_settings["existing_secret_reference"] = credential_reference;
+                    redacted_secret = redact_secret(read_secret_file(runtime.config.data_root_path / credential_reference));
+                } else {
+                    credential_reference = std::filesystem::relative(provider_secret_path(runtime.config.data_root_path, provider_name), runtime.config.data_root_path).string();
+                    write_secret_file(provider_secret_path(runtime.config.data_root_path, provider_name), runtime.config.command_parameters.at("api_key"));
+                    redacted_secret = redact_secret(runtime.config.command_parameters.at("api_key"));
+                }
+            }
             core::IntegrationConfigurationRecord record{.integration_config_id = provider_config_id_for_name(provider_name),
                                                         .integration_id = provider_name,
                                                         .display_name = provider_name,
@@ -1342,9 +1429,9 @@ ApplicationExitCode execute_command(ApplicationRuntime& runtime,
                                                         .status = core::IntegrationStatus::Enabled,
                                                         .capability_visibility = {"operator-query", "integration-test-provider"},
                                                         .connection_diagnostics = {},
-                                                        .credential_storage_mode = core::CredentialStorageMode::ExternalSecretReference,
-                                                        .credential_reference = secret_relative,
-                                                        .non_secret_settings = {{"model_name", sanitize_for_storage(runtime.config.command_parameters.at("model_name"))}},
+                                                        .credential_storage_mode = credential_storage_mode,
+                                                        .credential_reference = credential_reference,
+                                                        .non_secret_settings = non_secret_settings,
                                                         .created_at = existing ? existing->created_at : now,
                                                         .updated_at = now,
                                                         .version = existing ? existing->version + 1 : 1};
@@ -1356,8 +1443,10 @@ ApplicationExitCode execute_command(ApplicationRuntime& runtime,
             output << "integration_set_provider=ok\n"
                    << "provider_name=" << provider_name << '\n'
                    << "model_name=" << record.non_secret_settings.at("model_name") << '\n'
+                   << "secret_source=" << secret_source << '\n'
+                   << "env_var_name=" << default_if_empty(record.non_secret_settings.contains("env_var_name") ? record.non_secret_settings.at("env_var_name") : std::string{}, "unset") << '\n'
                    << "credential_reference=" << record.credential_reference << '\n'
-                   << "api_key_redacted=" << redact_secret(runtime.config.command_parameters.at("api_key")) << '\n'
+                   << "api_key_redacted=" << redacted_secret << '\n'
                    << "version=" << record.version << '\n';
             return complete(ApplicationExitCode::Success, "Integration provider configured.");
         }
@@ -1377,11 +1466,13 @@ ApplicationExitCode execute_command(ApplicationRuntime& runtime,
             output << "integration_list_providers=ok\n"
                    << "provider_count=" << providers.size() << '\n';
             for (const auto& record : providers) {
-                const auto secret = read_secret_file(runtime.config.data_root_path / record.credential_reference);
+                const auto [secret, reference] = provider_secret_status(record);
                 emit_ordered_kv_block(output, {{"provider_name", record.integration_id},
                                                {"enabled", record.enabled ? "true" : "false"},
                                                {"status", core::to_string(record.status)},
                                                {"model_name", default_if_empty(record.non_secret_settings.contains("model_name") ? record.non_secret_settings.at("model_name") : std::string{}, "unset")},
+                                               {"secret_source", default_if_empty(record.non_secret_settings.contains("secret_source") ? record.non_secret_settings.at("secret_source") : std::string{}, record.credential_storage_mode == core::CredentialStorageMode::InlinePlaceholderOnly ? "env" : "direct")},
+                                               {"credential_reference", reference},
                                                {"api_key_redacted", redact_secret(secret)}});
             }
             return complete(ApplicationExitCode::Success, "Integration providers listed.");
