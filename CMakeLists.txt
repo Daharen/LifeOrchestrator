@@ -38,6 +38,24 @@ target_link_libraries(lifeorchestrator_control_plane PUBLIC lifeorchestrator_cor
 
 add_library(lifeorchestrator_app_support
     src/app/application_bootstrap.cpp
+    src/app/app_support/artifact_query_service.cpp
+    src/app/app_support/artifact_query_module.cpp
+    src/app/app_support/memory/activity_repository.cpp
+    src/app/app_support/memory/behavior_repository.cpp
+    src/app/app_support/memory/scheduling_repository.cpp
+    src/app/app_support/memory/procedural_repository.cpp
+    src/app/app_support/memory/integration_repository.cpp
+    src/ui/artifact_renderer.cpp
+    src/ui/artifact_panels/artifact_panel.cpp
+    src/ui/artifact_panels/activity_inventory_panel.cpp
+    src/ui/artifact_panels/procedural_proposals_panel.cpp
+    src/ui/artifact_panels/behavioral_backlog_panel.cpp
+    src/ui/artifact_panels/behavioral_interventions_panel.cpp
+    src/ui/artifact_panels/scheduling_candidates_panel.cpp
+    src/ui/artifact_panels/schedule_proposals_panel.cpp
+    src/ui/artifact_panels/behavioral_reevaluations_panel.cpp
+    src/ui/artifact_panels/provider_config_panel.cpp
+    src/ui/artifact_panels/artifact_panels_registry.cpp
 )
 target_include_directories(lifeorchestrator_app_support PUBLIC src)
 target_link_libraries(lifeorchestrator_app_support PUBLIC lifeorchestrator_control_plane lifeorchestrator_integration)

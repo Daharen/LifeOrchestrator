@@ -1,5 +1,7 @@
 #pragma once
 
+#include "app/app_support/artifact_query_module.hpp"
+#include "app/app_support/artifact_query_service.hpp"
 #include "control_plane/control_plane.hpp"
 #include "coordination/behavioral_triage_module.hpp"
 #include "coordination/scheduling_coordination_module.hpp"
@@ -43,6 +45,7 @@ enum class ApplicationRunMode {
     IntegrationShowProvider,
     IntegrationListProviders,
     IntegrationTestProvider,
+    ArtifactQuery,
     OperatorQuery,
     OperatorConsole,
     Help,
@@ -85,6 +88,8 @@ struct ApplicationRuntime {
     core::FileMemoryStore memory_store;
     core::MemoryService memory_service;
     integration::IntegrationConfigurationRepository integration_repository;
+    ArtifactQueryService artifact_query_service;
+    std::shared_ptr<ArtifactQueryModule> artifact_query_module;
     control_plane::ModuleRegistry module_registry;
     std::shared_ptr<coordination::SchedulingCoordinationModule> scheduling_module;
     std::shared_ptr<coordination::BehavioralTriageModule> behavioral_module;

@@ -1,3 +1,4 @@
+#include "ui/artifact_renderer.hpp"
 #include "app/application_bootstrap.hpp"
 #include "coordination/scheduling_engine.hpp"
 
@@ -55,6 +56,7 @@ ApplicationRunMode parse_run_mode(const std::string& value) {
     if (value == "integration-show-provider") return ApplicationRunMode::IntegrationShowProvider;
     if (value == "integration-list-providers") return ApplicationRunMode::IntegrationListProviders;
     if (value == "integration-test-provider") return ApplicationRunMode::IntegrationTestProvider;
+    if (value == "artifact.query") return ApplicationRunMode::ArtifactQuery;
     if (value == "operator-query") return ApplicationRunMode::OperatorQuery;
     if (value == "operator-console") return ApplicationRunMode::OperatorConsole;
     if (value == "help") return ApplicationRunMode::Help;
@@ -90,6 +92,7 @@ std::string run_mode_name(ApplicationRunMode mode) {
         case ApplicationRunMode::IntegrationShowProvider: return "integration-show-provider";
         case ApplicationRunMode::IntegrationListProviders: return "integration-list-providers";
         case ApplicationRunMode::IntegrationTestProvider: return "integration-test-provider";
+        case ApplicationRunMode::ArtifactQuery: return "artifact.query";
         case ApplicationRunMode::OperatorQuery: return "operator-query";
         case ApplicationRunMode::OperatorConsole: return "operator-console";
         case ApplicationRunMode::Help: return "help";
@@ -114,7 +117,7 @@ const std::vector<std::string>& command_names() {
     static const std::vector<std::string> commands = {
         "aliases", "behavioral-health-check", "behavioral-list-backlog", "behavioral-list-interventions", "behavioral-list-reevaluations",
         "behavioral-record-state", "behavioral-reevaluate-backlog", "behavioral-status", "bootstrap-check", "commands",
-        "help", "integration-list-providers", "integration-set-provider", "integration-show-provider", "integration-test-provider",
+        "artifact.query", "help", "integration-list-providers", "integration-set-provider", "integration-show-provider", "integration-test-provider",
         "list-modules", "operator-console", "operator-query", "procedural-health-check", "procedural-list-activities",
         "procedural-list-audit-runs", "procedural-list-proposals", "procedural-run-audit", "procedural-upsert-activity",
         "schedule-health-check", "scheduling-generate-candidates", "scheduling-generate-proposals", "scheduling-list-candidates",
@@ -236,6 +239,7 @@ bool is_allowed_command_option(ApplicationRunMode mode, const std::string& key) 
     if (mode == ApplicationRunMode::IntegrationSetProvider) return key == "provider-name" || key == "api-key" || key == "model-name";
     if (mode == ApplicationRunMode::IntegrationShowProvider) return key == "provider-name";
     if (mode == ApplicationRunMode::IntegrationTestProvider) return key == "provider-name";
+    if (mode == ApplicationRunMode::ArtifactQuery) return key == "artifact-type" || key == "limit";
     if (mode == ApplicationRunMode::OperatorQuery) return key == "input";
     if (mode == ApplicationRunMode::Suggest) return key == "input";
     return key == "now";
@@ -261,6 +265,7 @@ std::string normalize_command_option_key(const std::string& key) {
     if (key == "provider-name") return "provider_name";
     if (key == "api-key") return "api_key";
     if (key == "model-name") return "model_name";
+    if (key == "artifact-type") return "artifact_type";
     return key;
 }
 
@@ -459,6 +464,8 @@ ApplicationRuntime::ApplicationRuntime(const ApplicationBootstrapConfig& bootstr
       memory_store(bootstrap_config.data_root_path, &event_logger),
       memory_service(memory_store),
       integration_repository(bootstrap_config.data_root_path),
+      artifact_query_service(memory_service, integration_repository, bootstrap_config.data_root_path),
+      artifact_query_module(std::make_shared<ArtifactQueryModule>(&artifact_query_service)),
       scheduling_module(std::make_shared<coordination::SchedulingCoordinationModule>(&memory_service)),
       behavioral_module(std::make_shared<coordination::BehavioralTriageModule>(&memory_service)),
       procedural_module(),
@@ -567,7 +574,7 @@ ApplicationBootstrapResult resolve_bootstrap_config(const std::vector<std::strin
 }
 
 std::vector<std::shared_ptr<modules::IModule>> build_runtime_modules(ApplicationRuntime& runtime) {
-    return {runtime.behavioral_module, runtime.procedural_module, runtime.scheduling_module};
+    return {runtime.artifact_query_module, runtime.behavioral_module, runtime.procedural_module, runtime.scheduling_module};
 }
 
 ApplicationBootstrapResult initialize_runtime(ApplicationRuntime& runtime) {
@@ -1229,6 +1236,35 @@ ApplicationExitCode execute_command(ApplicationRuntime& runtime,
                    << "model_name=" << default_if_empty(record->non_secret_settings.contains("model_name") ? record->non_secret_settings.at("model_name") : std::string{}, "unset") << '\n'
                    << "ready=true\ntransport=stub\n";
             return complete(ApplicationExitCode::Success, "Integration provider readiness succeeded.");
+        }
+        case ApplicationRunMode::ArtifactQuery: {
+            if (!runtime.config.command_parameters.contains("artifact_type") || runtime.config.command_parameters.at("artifact_type").empty()) {
+                error << "artifact_query=failed\nmessage=missing_artifact_type\n";
+                return complete(ApplicationExitCode::CommandValidationFailure, "Missing required argument: artifact_type");
+            }
+            std::optional<std::size_t> limit;
+            if (runtime.config.command_parameters.contains("limit") && !runtime.config.command_parameters.at("limit").empty()) {
+                limit = static_cast<std::size_t>(std::stoull(runtime.config.command_parameters.at("limit")));
+            }
+            auto request_parameters = core::StringMap{{"artifact_type", runtime.config.command_parameters.at("artifact_type")}};
+            if (limit.has_value()) request_parameters["limit"] = std::to_string(*limit);
+            const auto dispatch = runtime.control_plane.dispatch({"app-artifact-query", "artifact.query", runtime.config.application_name, core::RiskTier::Informational, request_parameters, core::current_timestamp_utc()});
+            if (dispatch.status != core::ExecutionStatus::Succeeded) {
+                error << "artifact_query=failed\nmessage=" << dispatch.message << '\n';
+                return complete(ApplicationExitCode::RuntimeOperationFailure, dispatch.message);
+            }
+            const auto result = runtime.artifact_query_service.query({runtime.config.command_parameters.at("artifact_type"), limit});
+            if (!result.ok || !result.value) {
+                error << "artifact_query=failed\nmessage=" << result.message << '\n';
+                return complete(ApplicationExitCode::RuntimeOperationFailure, result.message);
+            }
+            output << "artifact_query=ok\n"
+                   << "artifact_type=" << runtime.config.command_parameters.at("artifact_type") << '\n'
+                   << "artifact_count=" << result.value->artifacts.size() << '\n';
+            for (const auto& artifact : result.value->artifacts) {
+                output << ui::render_artifact_as_text(artifact);
+            }
+            return complete(ApplicationExitCode::Success, "Artifact query completed.");
         }
         case ApplicationRunMode::OperatorQuery: {
             const auto input = runtime.config.command_parameters.contains("input") ? runtime.config.command_parameters.at("input") : std::string{};
