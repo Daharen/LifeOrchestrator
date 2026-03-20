@@ -82,7 +82,37 @@ void test_behavioral_application_commands_and_modules() {
     assert_true(modules_text.find("coordination.scheduling") != std::string::npos, "scheduling module should be listed");
     assert_true(modules_text.find("coordination.behavioral_triage") != std::string::npos, "behavioral module should be listed");
     assert_true(modules_text.find("meta.procedural_auditor") != std::string::npos, "procedural module should be listed");
+    assert_true(modules_text.find("memory.artifact_query") != std::string::npos, "artifact query module should be listed");
 }
+
+void test_artifact_query_command_surface() {
+    const std::filesystem::path root = "artifacts/artifact_query_surface";
+    std::filesystem::remove_all(root);
+
+    std::ostringstream upsert_out;
+    std::ostringstream upsert_err;
+    auto rc = life_orchestrator::app::run_application({"procedural-upsert-activity", "--data-root=" + root.string(), "--quiet-startup", "--activity-id", "activity.focus", "--title", "Focus block", "--domain-source", "planning", "--frequency", "daily", "--duration-minutes", "45", "--effort", "5", "--outcome-value", "7"}, upsert_out, upsert_err, "", std::filesystem::current_path());
+    assert_true(rc == 0, "procedural-upsert-activity should seed artifact query data");
+
+    std::ostringstream provider_out;
+    std::ostringstream provider_err;
+    rc = life_orchestrator::app::run_application({"integration-set-provider", "--data-root=" + root.string(), "--quiet-startup", "--provider-name", "openai", "--api-key", "TEST_KEY_123", "--model-name", "gpt-5"}, provider_out, provider_err, "", std::filesystem::current_path());
+    assert_true(rc == 0, "integration-set-provider should seed provider artifacts");
+
+    std::ostringstream activity_out;
+    std::ostringstream activity_err;
+    rc = life_orchestrator::app::run_application({"artifact.query", "--data-root=" + root.string(), "--quiet-startup", "--artifact-type", "activity_inventory"}, activity_out, activity_err, "", std::filesystem::current_path());
+    assert_true(rc == 0, "artifact.query should support activity inventory");
+    assert_true(activity_out.str().find("artifact_count=1") != std::string::npos, "artifact.query should report activity counts");
+    assert_true(activity_out.str().find("artifact_id=activity.focus") != std::string::npos, "artifact.query should render activity envelopes");
+
+    std::ostringstream provider_list_out;
+    std::ostringstream provider_list_err;
+    rc = life_orchestrator::app::run_application({"artifact.query", "--data-root=" + root.string(), "--quiet-startup", "--artifact-type", "provider_config_summary"}, provider_list_out, provider_list_err, "", std::filesystem::current_path());
+    assert_true(rc == 0, "artifact.query should support provider config summaries");
+    assert_true(provider_list_out.str().find("api_key_redacted=TE***23") != std::string::npos, "artifact.query should redact provider secrets");
+}
+
 
 void test_activity_inventory_persistence_and_reload() {
     Harness harness{"procedural_persistence"};
@@ -752,6 +782,7 @@ void test_application_command_helper_exports() {
     const auto commands = life_orchestrator::app::list_application_commands();
     assert_true(std::find(commands.begin(), commands.end(), "status") != commands.end(), "command helper should expose status");
     assert_true(std::find(commands.begin(), commands.end(), "operator-console") != commands.end(), "command helper should expose operator console");
+    assert_true(std::find(commands.begin(), commands.end(), "artifact.query") != commands.end(), "command helper should expose artifact query command");
 
     const auto aliases = life_orchestrator::app::list_application_aliases();
     auto saw_backlog = false;
@@ -851,6 +882,7 @@ int main() {
     try {
         test_behavioral_application_commands_and_modules();
         test_activity_inventory_persistence_and_reload();
+        test_artifact_query_command_surface();
         test_effort_value_classification();
         test_procedural_audit_generation_and_behavioral_routing();
         test_procedural_application_commands();
