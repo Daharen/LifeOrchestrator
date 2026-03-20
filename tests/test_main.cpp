@@ -1174,12 +1174,32 @@ void test_operator_query_provider_and_status_visibility() {
     assert_true(rc == 0, "operator-query should execute deterministic status command before fallback");
     assert_true(deterministic_out.str().find("run_mode=status") != std::string::npos, "deterministic operator-query input should route to status");
 
-    std::ostringstream fallback_out;
-    std::ostringstream fallback_err;
-    rc = life_orchestrator::app::run_application({"operator-query", "--data-root=" + provider_root.string(), "--quiet-startup", "--input", "what should I focus on today?"}, fallback_out, fallback_err, "", std::filesystem::current_path());
-    assert_true(rc == 0, "operator-query should use configured stub provider for unmatched natural language");
-    assert_true(fallback_out.str().find("operator_query=llm_fallback") != std::string::npos, "operator-query should mark fallback execution");
-    assert_true(fallback_out.str().find("response_text=Stub response for input: what should I focus on today?") != std::string::npos, "operator-query should emit deterministic stub response");
+    std::ostringstream activity_out;
+    std::ostringstream activity_err;
+    rc = life_orchestrator::app::run_application({"operator-query", "--data-root=" + provider_root.string(), "--quiet-startup", "--input", "create a weekly laundry task"}, activity_out, activity_err, "", std::filesystem::current_path());
+    assert_true(rc == 0, "operator-query should use configured provider-backed interpreter for natural language activity creation");
+    assert_true(activity_out.str().find("operator_query=llm_interpreter") != std::string::npos, "operator-query should mark interpreter execution");
+    assert_true(activity_out.str().find("matched_command=procedural-upsert-activity") != std::string::npos, "natural language request should map to activity upsert");
+    assert_true(activity_out.str().find("intent_execution=executed") != std::string::npos, "high-confidence low-risk routing should execute through deterministic layer");
+    assert_true(activity_out.str().find("activity_id=activity.weekly-laundry") != std::string::npos, "resolved activity command should execute deterministically");
+    assert_true(activity_out.str().find("operator_input_raw=create a weekly laundry task") != std::string::npos, "raw operator input should be logged");
+    assert_true(activity_out.str().find("intent_model_output=mode=proposed") != std::string::npos, "structured model output should be logged");
+    assert_true(activity_out.str().find("intent_route_command=procedural-upsert-activity") != std::string::npos, "final command resolution should be logged");
+
+    std::ostringstream invalid_out;
+    std::ostringstream invalid_err;
+    rc = life_orchestrator::app::run_application({"operator-query", "--data-root=" + provider_root.string(), "--quiet-startup", "--input", "compose me a symphony"}, invalid_out, invalid_err, "", std::filesystem::current_path());
+    assert_true(rc == 2, "invalid operator-query requests should fail with helpful explanation");
+    assert_true(invalid_err.str().find("I couldn't find a confident command match") != std::string::npos, "invalid natural language should emit helpful explanation rather than argument noise");
+    assert_true(invalid_out.str().find("closest_commands=") != std::string::npos, "invalid natural language should list closest valid commands");
+
+    std::ostringstream risky_out;
+    std::ostringstream risky_err;
+    rc = life_orchestrator::app::run_application({"operator-query", "--data-root=" + provider_root.string(), "--quiet-startup", "--input", "update the provider api key"}, risky_out, risky_err, "", std::filesystem::current_path());
+    assert_true(rc == 0, "high-risk operator-query requests should return confirmation guidance");
+    assert_true(risky_out.str().find("matched_command=integration-set-provider") != std::string::npos, "provider update should route to integration-set-provider");
+    assert_true(risky_out.str().find("requires_confirmation=true") != std::string::npos, "high-risk actions should require confirmation");
+    assert_true(risky_out.str().find("intent_execution=deferred_for_confirmation") != std::string::npos, "high-risk actions should not execute immediately");
 
     std::ostringstream readiness_out;
     std::ostringstream readiness_err;
