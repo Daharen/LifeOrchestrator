@@ -58,7 +58,7 @@ struct QuickCommand {
 struct ActionDialogFieldControl {
     life_orchestrator::app::ActionFormFieldSpec field;
     HWND label = nullptr;
-    HWND edit = nullptr;
+    HWND input = nullptr;
     HWND help = nullptr;
 };
 
@@ -71,6 +71,7 @@ struct ActionDialogState {
 
 std::wstring widen(const std::string& value);
 std::string get_control_text(HWND handle);
+void layout_action_dialog(HWND hwnd);
 
 const std::vector<QuickCommand>& quick_commands() {
     static const std::vector<QuickCommand> commands = [] {
@@ -142,6 +143,28 @@ void set_edit_placeholder(HWND handle, const std::wstring& value) {
     SendMessageW(handle, EM_SETCUEBANNER, 0, reinterpret_cast<LPARAM>(value.c_str()));
 }
 
+bool field_is_visible(const life_orchestrator::app::ActionFormFieldSpec& field, const std::vector<ActionDialogFieldControl>& fields) {
+    for (const auto& rule : field.visibility_rules) {
+        const auto it = std::find_if(fields.begin(), fields.end(), [&](const auto& candidate) { return candidate.field.field_id == rule.controlling_field_id; });
+        if (it == fields.end()) return false;
+        if (get_control_text(it->input) != rule.expected_value) return false;
+    }
+    return true;
+}
+
+void set_field_visibility(const ActionDialogFieldControl& field, const bool visible) {
+    ShowWindow(field.label, visible ? SW_SHOW : SW_HIDE);
+    ShowWindow(field.input, visible ? SW_SHOW : SW_HIDE);
+    ShowWindow(field.help, visible ? SW_SHOW : SW_HIDE);
+}
+
+void update_action_dialog_visibility(HWND hwnd) {
+    auto* state = reinterpret_cast<ActionDialogState*>(GetWindowLongPtrW(hwnd, GWLP_USERDATA));
+    if (state == nullptr) return;
+    for (const auto& field : state->fields) set_field_visibility(field, field_is_visible(field.field, state->fields));
+    layout_action_dialog(hwnd);
+}
+
 void layout_action_dialog(HWND hwnd) {
     auto* state = reinterpret_cast<ActionDialogState*>(GetWindowLongPtrW(hwnd, GWLP_USERDATA));
     if (state == nullptr) return;
@@ -157,10 +180,11 @@ void layout_action_dialog(HWND hwnd) {
     int y = margin;
 
     for (auto& field : state->fields) {
+        if (!IsWindowVisible(field.label)) continue;
         MoveWindow(field.label, margin, y, content_width, label_height, TRUE);
         y += label_height + 2;
-        MoveWindow(field.edit, margin, y, content_width, edit_height, TRUE);
-        y += edit_height + 2;
+        MoveWindow(field.input, margin, y, content_width, edit_height + (field.field.input_kind == "dropdown" ? 120 : 0), TRUE);
+        y += edit_height + (field.field.input_kind == "dropdown" ? 120 : 0) + 2;
         MoveWindow(field.help, margin, y, content_width, help_height, TRUE);
         y += help_height + field_gap;
     }
@@ -184,15 +208,31 @@ LRESULT CALLBACK action_dialog_proc(HWND hwnd, UINT message, WPARAM w_param, LPA
             for (std::size_t index = 0; index < state->spec.input_fields.size(); ++index) {
                 const auto& field = state->spec.input_fields[index];
                 auto label = CreateWindowExW(0, L"STATIC", action_dialog_label_text(field).c_str(), WS_CHILD | WS_VISIBLE, 0, 0, 0, 0, hwnd, control_menu_id(kDialogFirstFieldLabel + static_cast<int>(index)), nullptr, nullptr);
-                auto edit = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", L"", WS_CHILD | WS_VISIBLE | ES_AUTOHSCROLL, 0, 0, 0, 0, hwnd, control_menu_id(kDialogFirstFieldEdit + static_cast<int>(index)), nullptr, nullptr);
+                const auto is_dropdown = field.input_kind == "dropdown";
+                const auto class_name = is_dropdown ? L"COMBOBOX" : L"EDIT";
+                const DWORD style = is_dropdown ? (WS_CHILD | WS_VISIBLE | WS_VSCROLL | CBS_DROPDOWNLIST) : (WS_CHILD | WS_VISIBLE | ES_AUTOHSCROLL | (field.input_kind == "password" ? ES_PASSWORD : 0));
+                const DWORD ex_style = is_dropdown ? 0 : WS_EX_CLIENTEDGE;
+                auto input = CreateWindowExW(ex_style, class_name, L"", style, 0, 0, 0, 0, hwnd, control_menu_id(kDialogFirstFieldEdit + static_cast<int>(index)), nullptr, nullptr);
                 auto help = CreateWindowExW(0, L"STATIC", action_dialog_help_text(field).c_str(), WS_CHILD | WS_VISIBLE, 0, 0, 0, 0, hwnd, nullptr, nullptr, nullptr);
-                if (!field.example_value.empty()) set_edit_placeholder(edit, widen(field.example_value));
-                state->fields.push_back({field, label, edit, help});
+                if (is_dropdown) {
+                    for (const auto& option : field.options) {
+                        const auto widened = widen(option.label);
+                        const auto idx = SendMessageW(input, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(widened.c_str()));
+                        SendMessageW(input, CB_SETITEMDATA, idx, reinterpret_cast<LPARAM>(index));
+                    }
+                    int select_index = 0;
+                    for (std::size_t option_index = 0; option_index < field.options.size(); ++option_index) {
+                        if (field.options[option_index].value == field.example_value) select_index = static_cast<int>(option_index);
+                    }
+                    SendMessageW(input, CB_SETCURSEL, select_index, 0);
+                } else if (!field.example_value.empty()) set_edit_placeholder(input, widen(field.example_value));
+                state->fields.push_back({field, label, input, help});
             }
             CreateWindowExW(0, L"BUTTON", L"Submit", WS_CHILD | WS_VISIBLE | BS_DEFPUSHBUTTON, 0, 0, 0, 0, hwnd, control_menu_id(kDialogSubmitButton), nullptr, nullptr);
             CreateWindowExW(0, L"BUTTON", L"Cancel", WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON, 0, 0, 0, 0, hwnd, control_menu_id(kDialogCancelButton), nullptr, nullptr);
             layout_action_dialog(hwnd);
-            if (!state->fields.empty()) SetFocus(state->fields.front().edit);
+            update_action_dialog_visibility(hwnd);
+            if (!state->fields.empty()) SetFocus(state->fields.front().input);
             return 0;
         }
         case WM_SIZE:
@@ -205,7 +245,7 @@ LRESULT CALLBACK action_dialog_proc(HWND hwnd, UINT message, WPARAM w_param, LPA
                     if (state == nullptr) return 0;
                     std::vector<life_orchestrator::app::ActionFormSubmissionField> values;
                     values.reserve(state->fields.size());
-                    for (const auto& field : state->fields) values.push_back({field.field.field_id, get_control_text(field.edit)});
+                    for (const auto& field : state->fields) values.push_back({field.field.field_id, get_control_text(field.input)});
                     const auto submission = life_orchestrator::app::build_action_form_submission_args(state->spec, values);
                     state->submitted_args = submission.args;
                     state->submitted = true;
@@ -216,6 +256,7 @@ LRESULT CALLBACK action_dialog_proc(HWND hwnd, UINT message, WPARAM w_param, LPA
                     DestroyWindow(hwnd);
                     return 0;
                 default:
+                    if (HIWORD(w_param) == CBN_SELCHANGE) update_action_dialog_visibility(hwnd);
                     break;
             }
             break;
@@ -280,6 +321,24 @@ std::optional<std::vector<std::string>> show_action_form_dialog(HWND owner, cons
 }
 
 std::string get_control_text(HWND handle) {
+    wchar_t class_name[32] = {};
+    GetClassNameW(handle, class_name, 31);
+    if (std::wstring(class_name) == L"COMBOBOX") {
+        const auto selection = SendMessageW(handle, CB_GETCURSEL, 0, 0);
+        if (selection == CB_ERR) return {};
+        wchar_t buffer[512] = {};
+        SendMessageW(handle, CB_GETLBTEXT, selection, reinterpret_cast<LPARAM>(buffer));
+        const auto chosen_label = narrow(buffer);
+        auto* state = reinterpret_cast<ActionDialogState*>(GetWindowLongPtrW(GetParent(handle), GWLP_USERDATA));
+        if (state != nullptr) {
+            const int control_id = static_cast<int>(GetDlgCtrlID(handle)) - kDialogFirstFieldEdit;
+            if (control_id >= 0 && static_cast<std::size_t>(control_id) < state->fields.size()) {
+                const auto& options = state->fields[static_cast<std::size_t>(control_id)].field.options;
+                if (static_cast<std::size_t>(selection) < options.size()) return options[static_cast<std::size_t>(selection)].value;
+            }
+        }
+        return chosen_label;
+    }
     const int length = GetWindowTextLengthW(handle);
     std::wstring buffer(static_cast<std::size_t>(length + 1), L'\0');
     const int written = GetWindowTextW(handle, buffer.data(), length + 1);
@@ -557,6 +616,7 @@ LRESULT CALLBACK window_proc(HWND hwnd, UINT message, WPARAM w_param, LPARAM l_p
                     if (notify_code == LBN_DBLCLK) apply_selected_suggestion(hwnd);
                     return 0;
                 default:
+                    if (HIWORD(w_param) == CBN_SELCHANGE) update_action_dialog_visibility(hwnd);
                     break;
             }
             break;

@@ -1007,7 +1007,7 @@ void test_artifact_presentation_and_action_form_registries() {
 
     const auto provider_update = life_orchestrator::app::find_action_form_spec_by_id("update_provider_configuration");
     assert_true(provider_update.has_value(), "provider update action form should exist");
-    assert_true(provider_update->display_label == "Provider Configuration Update", "provider action label should be authoritative");
+    assert_true(provider_update->display_label == "Configure Provider", "provider action label should be authoritative");
 }
 
 void test_gui_panels_and_quick_actions_source_registry_labels() {
@@ -1140,6 +1140,7 @@ void test_integration_provider_persistence_redaction_and_visibility() {
     assert_true(show_text.find("api_key_redacted=TE***23") != std::string::npos, "show provider should redact api key");
     assert_true(show_text.find("model_name=gpt-5") != std::string::npos, "show provider should reload non-secret settings");
     assert_true(show_text.find("TEST_KEY_123") == std::string::npos, "show provider should never expose raw key");
+    assert_true(show_text.find("secret_source=direct") != std::string::npos, "show provider should expose direct-secret metadata");
 
     std::ostringstream list_out;
     std::ostringstream list_err;
@@ -1151,6 +1152,38 @@ void test_integration_provider_persistence_redaction_and_visibility() {
     assert_true(list_text.find("api_key_redacted=TE***23") != std::string::npos, "provider list should redact keys");
 }
 
+void test_integration_set_provider_env_var_reference_mode() {
+    const std::filesystem::path root = "artifacts/operator_provider_env";
+    std::filesystem::remove_all(root);
+    setenv("OPENAI_API_KEY", "TEST_ENV_KEY_789", 1);
+
+    std::ostringstream set_out;
+    std::ostringstream set_err;
+    auto rc = life_orchestrator::app::run_application({"integration-set-provider", "--data-root=" + root.string(), "--quiet-startup", "--provider-name", "openai", "--model-name", "gpt-5", "--secret-source", "env", "--env-var", "OPENAI_API_KEY"}, set_out, set_err, "", std::filesystem::current_path());
+    assert_true(rc == 0, "integration-set-provider should accept env-var reference mode");
+    assert_true(!std::filesystem::exists(root / "config" / "providers" / "openai.secret"), "env-var mode should not create a local secret file");
+    const auto set_text = set_out.str();
+    assert_true(set_text.find("secret_source=env") != std::string::npos, "env-var mode should record secret source");
+    assert_true(set_text.find("env_var_name=OPENAI_API_KEY") != std::string::npos, "env-var mode should echo env-var metadata");
+    assert_true(set_text.find("api_key_redacted=TE***89") != std::string::npos, "env-var mode should redact resolved secret values");
+
+    std::ostringstream show_out;
+    std::ostringstream show_err;
+    rc = life_orchestrator::app::run_application({"integration-show-provider", "--data-root=" + root.string(), "--quiet-startup", "--provider-name", "openai"}, show_out, show_err, "", std::filesystem::current_path());
+    assert_true(rc == 0, "integration-show-provider should succeed after env-var setup");
+    const auto show_text = show_out.str();
+    assert_true(show_text.find("credential_storage_mode=InlinePlaceholderOnly") != std::string::npos, "env-var setup should persist env-backed storage mode");
+    assert_true(show_text.find("env_var_name=OPENAI_API_KEY") != std::string::npos, "show provider should preserve env-var metadata");
+    assert_true(show_text.find("TEST_ENV_KEY_789") == std::string::npos, "show provider should not leak env secret values");
+
+    std::ostringstream readiness_out;
+    std::ostringstream readiness_err;
+    rc = life_orchestrator::app::run_application({"integration-test-provider", "--data-root=" + root.string(), "--quiet-startup", "--provider-name", "openai"}, readiness_out, readiness_err, "", std::filesystem::current_path());
+    assert_true(rc == 0, "integration-test-provider should work with env-var-backed secrets");
+    assert_true(readiness_out.str().find("ready=true") != std::string::npos, "env-var-backed provider should be ready");
+}
+
+
 void test_operator_query_provider_and_status_visibility() {
     const std::filesystem::path no_provider_root = "artifacts/operator_query_no_provider";
     std::filesystem::remove_all(no_provider_root);
@@ -1160,6 +1193,7 @@ void test_operator_query_provider_and_status_visibility() {
     auto rc = life_orchestrator::app::run_application({"operator-query", "--data-root=" + no_provider_root.string(), "--quiet-startup", "--input", "what should I focus on today?"}, missing_out, missing_err, "", std::filesystem::current_path());
     assert_true(rc == 3, "operator-query without provider should fail gracefully");
     assert_true(missing_err.str().find("message=no_provider_configured") != std::string::npos, "operator-query should clearly report no configured provider");
+    assert_true(missing_err.str().find("remediation_action=update_provider_configuration") != std::string::npos, "operator-query should emit provider setup guidance when no provider is configured");
 
     const std::filesystem::path provider_root = "artifacts/operator_query_provider";
     std::filesystem::remove_all(provider_root);
@@ -1173,6 +1207,27 @@ void test_operator_query_provider_and_status_visibility() {
     rc = life_orchestrator::app::run_application({"operator-query", "--data-root=" + provider_root.string(), "--quiet-startup", "--input", "status"}, deterministic_out, deterministic_err, "", std::filesystem::current_path());
     assert_true(rc == 0, "operator-query should execute deterministic status command before fallback");
     assert_true(deterministic_out.str().find("run_mode=status") != std::string::npos, "deterministic operator-query input should route to status");
+
+    std::ostringstream explicit_out;
+    std::ostringstream explicit_err;
+    rc = life_orchestrator::app::run_application({"operator-query", "--data-root=" + no_provider_root.string(), "--quiet-startup", "--input", "integration-list-providers"}, explicit_out, explicit_err, "", std::filesystem::current_path());
+    assert_true(rc == 0, "explicit integration-list-providers should bypass provider routing even without configured provider");
+    assert_true(explicit_out.str().find("operator_query=llm_interpreter") == std::string::npos, "explicit integration-list-providers should bypass provider-backed routing");
+    assert_true(explicit_err.str().find("no_provider_configured") == std::string::npos, "explicit integration-list-providers should not fail for missing provider");
+
+    std::ostringstream exact_show_out;
+    std::ostringstream exact_show_err;
+    rc = life_orchestrator::app::run_application({"operator-query", "--data-root=" + provider_root.string(), "--quiet-startup", "--input", "integration-show-provider --provider-name openai"}, exact_show_out, exact_show_err, "", std::filesystem::current_path());
+    assert_true(rc == 0, "explicit integration-show-provider with flags should bypass intent routing");
+    assert_true(exact_show_out.str().find("operator_query=llm_interpreter") == std::string::npos, "explicit integration-show-provider should bypass provider-backed routing");
+    assert_true(exact_show_out.str().find("provider_name=openai") != std::string::npos, "explicit integration-show-provider should execute the underlying command");
+
+    std::ostringstream dash_out;
+    std::ostringstream dash_err;
+    rc = life_orchestrator::app::run_application({"operator-query", "--data-root=" + provider_root.string(), "--quiet-startup", "--input", std::string("integration-test-provider ") + std::string("\xE2\x80\x94", 3) + "provider-name openai"}, dash_out, dash_err, "", std::filesystem::current_path());
+    assert_true(rc == 0, "smart-dash integration command should normalize and execute");
+    assert_true(dash_out.str().find("operator_input_normalized=integration-test-provider --provider-name openai") != std::string::npos, "operator-query should normalize smart dashes in assisted input");
+    assert_true(dash_out.str().find("ready=true") != std::string::npos, "normalized smart-dash command should execute readiness test");
 
     std::ostringstream activity_out;
     std::ostringstream activity_err;
@@ -1247,6 +1302,7 @@ int main() {
         test_form_spec_missing_required_inputs_defer_to_command_layer();
         test_end_to_end_naive_operator_flow();
         test_integration_provider_persistence_redaction_and_visibility();
+        test_integration_set_provider_env_var_reference_mode();
         test_operator_query_provider_and_status_visibility();
     } catch (const std::exception& e) {
         std::cerr << "Test failure: " << e.what() << '\n';
