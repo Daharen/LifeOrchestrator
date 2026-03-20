@@ -1,6 +1,8 @@
 #include "ui/artifact_renderer.hpp"
 #include "app/app_support/action_form_registry.hpp"
 #include "app/app_support/artifact_presentation_registry.hpp"
+#include "app/app_support/intent_command_context.hpp"
+#include "app/app_support/intent_routing_contract.hpp"
 #include "app/application_bootstrap.hpp"
 #include "coordination/scheduling_engine.hpp"
 
@@ -295,6 +297,18 @@ std::vector<std::string> deterministic_suggestions(const std::string& partial) {
     results.insert(results.end(), loose_commands.begin(), loose_commands.end());
     results.erase(std::unique(results.begin(), results.end()), results.end());
     return results;
+}
+
+std::vector<std::string> closest_command_names(const std::string& partial, std::size_t limit = 3) {
+    auto suggestions = deterministic_suggestions(partial);
+    std::vector<std::string> closest;
+    for (const auto& suggestion : suggestions) {
+        const auto pos = suggestion.find("=>");
+        const auto normalized = pos == std::string::npos ? suggestion : suggestion.substr(pos + 2);
+        if (std::find(closest.begin(), closest.end(), normalized) == closest.end()) closest.push_back(normalized);
+        if (closest.size() >= limit) break;
+    }
+    return closest;
 }
 
 bool is_known_global_option(const std::string& value) {
@@ -747,7 +761,18 @@ ApplicationExitCode execute_command(ApplicationRuntime& runtime,
         if (api_key.empty()) return {false, "provider_not_ready=missing_api_key"};
         const auto model_name = record.non_secret_settings.contains("model_name") ? record.non_secret_settings.at("model_name") : std::string{"unset"};
         if (starts_with(api_key, "TEST_") || starts_with(api_key, "TEST") || record.integration_id == "stub") {
-            return {true, "provider_response=stubbed\nprovider_name=" + record.integration_id + "\nmodel_name=" + model_name + "\nresponse_text=Stub response for input: " + input + "\n"};
+            const auto request_only = [&]() {
+                const auto marker = input.rfind("User request: ");
+                return marker == std::string::npos ? input : input.substr(marker + 14);
+            }();
+            const auto lowered_input = [&] { std::string out = request_only; std::transform(out.begin(), out.end(), out.begin(), [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); }); return out; }();
+            if (lowered_input.find("weekly") != std::string::npos && lowered_input.find("laundry") != std::string::npos) {
+                return {true, "mode=proposed\nmatched_command=procedural-upsert-activity\nargs=procedural-upsert-activity --activity-id activity.weekly-laundry --title WeeklyLaundry --domain-source home --frequency weekly --duration-minutes 60 --effort-estimate 4 --outcome-value 6\nconfidence=0.92\nreasoning_summary=Weekly laundry maps to the existing activity upsert flow with required activity fields filled from safe defaults.\nrequires_confirmation=false\nclosest_commands=procedural-upsert-activity,procedural-list-activities,status\nuser_facing_message=I mapped your request to procedural-upsert-activity and filled the required weekly laundry defaults.\n"};
+            }
+            if (lowered_input.find("provider") != std::string::npos || lowered_input.find("api key") != std::string::npos) {
+                return {true, "mode=proposed\nmatched_command=integration-set-provider\nargs=integration-set-provider --provider-name openai --api-key TEST_KEY_123 --model-name gpt-5\nconfidence=0.82\nreasoning_summary=This request changes provider configuration, which is a high-risk action that must be confirmed.\nrequires_confirmation=true\nclosest_commands=integration-set-provider,integration-test-provider,integration-list-providers\nuser_facing_message=I found a likely provider configuration update, but it requires confirmation before execution.\n"};
+            }
+            return {true, "mode=failure\nmatched_command=\nargs=\nconfidence=0.21\nreasoning_summary=No safe structured command mapping was found from the available command list.\nrequires_confirmation=false\nclosest_commands=" + (closest_command_names(input).empty() ? std::string{} : [&](){ auto c=closest_command_names(input); std::ostringstream s; for(size_t i=0;i<c.size();++i){ if(i) s<<","; s<<c[i]; } return s.str(); }()) + "\nuser_facing_message=I couldn't find a confident command match. Try one of the closest valid commands instead.\n"};
         }
         return {false, "provider_not_ready=unsupported_live_transport"};
     };
@@ -758,16 +783,21 @@ ApplicationExitCode execute_command(ApplicationRuntime& runtime,
             routed_error << "operator_query=failed\nmessage=empty_input\n";
             return ApplicationExitCode::CommandValidationFailure;
         }
+        routed_output << "operator_input_raw=" << input << '\n';
         const auto tokens = split_console_input(input);
         if (!tokens.empty()) {
             const auto exact = tokens.front();
             const auto alias = resolve_alias(exact);
-            if (is_command_name(exact) || alias.has_value()) {
+            const bool command_like_tail = std::all_of(tokens.begin() + 1,
+                                                       tokens.end(),
+                                                       [](const std::string& token) { return !token.empty() && (token[0] == '-' || token.find('=') != std::string::npos); });
+            if ((is_command_name(exact) || alias.has_value()) && (tokens.size() == 1 || command_like_tail)) {
                 std::vector<std::string> forwarded;
                 forwarded.push_back(alias.value_or(exact));
                 for (std::size_t i = 1; i < tokens.size(); ++i) forwarded.push_back(tokens[i]);
                 forwarded.push_back("--data-root=" + runtime.config.data_root_path.string());
                 forwarded.push_back("--quiet-startup");
+                routed_output << "intent_route_mode=exact\nintent_route_command=" << forwarded.front() << '\n';
                 return static_cast<ApplicationExitCode>(run_application(forwarded, routed_output, routed_error, runtime.config.data_root_path.string(), std::filesystem::current_path()));
             }
         }
@@ -778,16 +808,36 @@ ApplicationExitCode execute_command(ApplicationRuntime& runtime,
             return ApplicationExitCode::RuntimeOperationFailure;
         }
         const auto& provider = providers.front();
-        routed_output << "operator_query=llm_fallback\n";
+        const auto context = build_intent_command_context(command_names(), alias_table(), list_action_form_specs());
+        const auto closest = closest_command_names(input);
+        const auto route = route_with_provider(input,
+                                               context,
+                                               closest,
+                                               [&](const std::string& prompt) {
+                                                   return run_stubbed_provider_request(provider, prompt + "\nUser request: " + input).second;
+                                               });
+        routed_output << "operator_query=llm_interpreter\n";
         routed_output << "provider_request_provider_name=" << provider.integration_id << '\n';
         routed_output << "provider_request_model_name=" << default_if_empty(provider.non_secret_settings.contains("model_name") ? provider.non_secret_settings.at("model_name") : std::string{}, "unset") << '\n';
-        auto [ok, response_text] = run_stubbed_provider_request(provider, input);
-        if (!ok) {
-            routed_error << "operator_query=failed\nmessage=" << response_text << '\n';
-            return ApplicationExitCode::RuntimeOperationFailure;
+        routed_output << "intent_model_output=" << route.raw_model_output << '\n';
+        routed_output << serialize_intent_routing_result(route);
+        routed_output << "intent_route_command=" << route.matched_command << '\n';
+
+        if (route.mode == "failure" || route.matched_command.empty()) {
+            routed_error << "operator_query=failed\nmessage=" << route.user_facing_message << '\n';
+            return ApplicationExitCode::CommandValidationFailure;
         }
-        routed_output << response_text;
-        return ApplicationExitCode::Success;
+        if (route.requires_confirmation || route.confidence < 0.9) {
+            routed_output << "intent_execution=deferred_for_confirmation\n";
+            return ApplicationExitCode::Success;
+        }
+
+        auto forwarded = route.args;
+        if (forwarded.empty()) forwarded.push_back(route.matched_command);
+        forwarded.push_back("--data-root=" + runtime.config.data_root_path.string());
+        forwarded.push_back("--quiet-startup");
+        routed_output << "intent_execution=executed\n";
+        return static_cast<ApplicationExitCode>(run_application(forwarded, routed_output, routed_error, runtime.config.data_root_path.string(), std::filesystem::current_path()));
     };
 
     if (const auto help_code = emit_command_help(runtime.config.run_mode); help_code.has_value()) return *help_code;

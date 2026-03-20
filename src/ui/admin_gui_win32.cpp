@@ -478,9 +478,9 @@ LRESULT CALLBACK window_proc(HWND hwnd, UINT message, WPARAM w_param, LPARAM l_p
             state->suggestion_list = CreateWindowExW(WS_EX_CLIENTEDGE, L"LISTBOX", L"", WS_CHILD | WS_VISIBLE | LBS_NOTIFY | WS_VSCROLL, 0, 0, 0, 0, hwnd, control_menu_id(kControlSuggestionList), nullptr, nullptr);
             CreateWindowExW(0, L"BUTTON", L"Copy Selected Suggestion", WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON, 0, 0, 0, 0, hwnd, control_menu_id(kControlUseSuggestionButton), nullptr, nullptr);
 
-            CreateWindowExW(0, L"STATIC", L"Operator command or natural-language input", WS_CHILD | WS_VISIBLE, 0, 0, 0, 0, hwnd, control_menu_id(kControlCommandLabel), nullptr, nullptr);
+            CreateWindowExW(0, L"STATIC", L"Assisted operator request", WS_CHILD | WS_VISIBLE, 0, 0, 0, 0, hwnd, control_menu_id(kControlCommandLabel), nullptr, nullptr);
             state->command_edit = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", L"status", WS_CHILD | WS_VISIBLE | ES_AUTOHSCROLL, 0, 0, 0, 0, hwnd, control_menu_id(kControlCommandEdit), nullptr, nullptr);
-            CreateWindowExW(0, L"BUTTON", L"Run Operator Query", WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON, 0, 0, 0, 0, hwnd, control_menu_id(kControlRunCommandButton), nullptr, nullptr);
+            CreateWindowExW(0, L"BUTTON", L"Route Request", WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON, 0, 0, 0, 0, hwnd, control_menu_id(kControlRunCommandButton), nullptr, nullptr);
             CreateWindowExW(0, L"BUTTON", L"Refresh Status", WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON, 0, 0, 0, 0, hwnd, control_menu_id(kControlRefreshStatusButton), nullptr, nullptr);
 
             state->status_text = CreateWindowExW(0, L"STATIC", L"Ready.", WS_CHILD | WS_VISIBLE, 0, 0, 0, 0, hwnd, control_menu_id(kControlStatusText), nullptr, nullptr);
