@@ -804,6 +804,94 @@ void test_application_command_helper_exports() {
     assert_true(result.standard_output.find("commands=ok") != std::string::npos, "command helper should capture stdout");
 }
 
+
+void test_command_surface_aliases_help_and_discoverability() {
+    const std::filesystem::path root = "artifacts/command_surface";
+    std::filesystem::remove_all(root);
+
+    std::ostringstream state_out;
+    std::ostringstream state_err;
+    auto rc = life_orchestrator::app::run_application({"record-state", "--data-root=" + root.string(), "--quiet-startup", "--available-capacity", "8", "--stress-level", "2", "--cognitive-load", "3", "--motivation-level", "7", "--recovery-status", "8", "--now", "2026-03-19T09:00:00.000Z"}, state_out, state_err, "", std::filesystem::current_path());
+    assert_true(rc == 0, "record-state alias should accept --motivation-level");
+    assert_true(state_out.str().find("behavioral_record_state=ok") != std::string::npos, "behavioral state alias should dispatch canonical command");
+
+    std::ostringstream upsert_out;
+    std::ostringstream upsert_err;
+    rc = life_orchestrator::app::run_application({"create-activity", "--data-root=" + root.string(), "--quiet-startup", "--activity-id", "activity.create", "--title", "Create alias", "--domain-source", "planning", "--frequency", "daily", "--duration-minutes", "30", "--effort-estimate", "4", "--outcome-value", "6", "--now", "2026-03-19T09:00:00.000Z"}, upsert_out, upsert_err, "", std::filesystem::current_path());
+    assert_true(rc == 0, "create-activity alias should resolve to canonical upsert command");
+    assert_true(upsert_out.str().find("activity_id=activity.create") != std::string::npos, "create-activity alias should preserve canonical output");
+
+    std::ostringstream help_out;
+    std::ostringstream help_err;
+    rc = life_orchestrator::app::run_application({"behavioral-record-state", "--data-root=" + root.string(), "--quiet-startup", "--help"}, help_out, help_err, "", std::filesystem::current_path());
+    assert_true(rc == 0, "behavioral-record-state --help should succeed");
+    const auto help_text = help_out.str();
+    assert_true(help_text.find("canonical_command=behavioral-record-state") != std::string::npos, "help should expose canonical command name");
+    assert_true(help_text.find("alias=record-state") != std::string::npos, "help should expose aliases");
+    assert_true(help_text.find("required=--motivation-level") != std::string::npos, "help should expose canonical required motivation flag");
+    assert_true(help_text.find("example=behavioral-record-state --available-capacity 8 --stress-level 2 --cognitive-load 3 --motivation-level 7 --recovery-status 8") != std::string::npos, "help should expose minimal example");
+
+    std::ostringstream missing_out;
+    std::ostringstream missing_err;
+    rc = life_orchestrator::app::run_application({"behavioral-record-state", "--data-root=" + root.string(), "--quiet-startup", "--available-capacity", "8", "--stress-level", "2", "--cognitive-load", "3", "--recovery-status", "8"}, missing_out, missing_err, "", std::filesystem::current_path());
+    assert_true(rc == 2, "behavioral-record-state should fail clearly when motivation is omitted");
+    assert_true(missing_err.str().find("accepted_flags=--motivation-level,--motivation") != std::string::npos, "missing motivation error should identify accepted flags");
+
+    const auto create_suggestions = life_orchestrator::app::suggest_application_commands("create");
+    assert_true(std::find(create_suggestions.begin(), create_suggestions.end(), "create=>procedural-upsert-activity") != create_suggestions.end(), "palette suggestions should index create alias");
+    const auto activity_suggestions = life_orchestrator::app::suggest_application_commands("activity");
+    assert_true(std::find(activity_suggestions.begin(), activity_suggestions.end(), "activity=>procedural-upsert-activity") != activity_suggestions.end(), "palette suggestions should index activity alias");
+    const auto record_suggestions = life_orchestrator::app::suggest_application_commands("record");
+    assert_true(std::find(record_suggestions.begin(), record_suggestions.end(), "record=>behavioral-record-state") != record_suggestions.end(), "palette suggestions should index record alias");
+    const auto state_suggestions = life_orchestrator::app::suggest_application_commands("state");
+    assert_true(std::find(state_suggestions.begin(), state_suggestions.end(), "state=>behavioral-record-state") != state_suggestions.end(), "palette suggestions should index state alias");
+}
+
+void test_end_to_end_naive_operator_flow() {
+    const std::filesystem::path root = "artifacts/naive_operator_flow";
+    std::filesystem::remove_all(root);
+
+    std::ostringstream create_out;
+    std::ostringstream create_err;
+    auto rc = life_orchestrator::app::run_application({"create-activity", "--data-root=" + root.string(), "--quiet-startup", "--activity-id", "activity.flow", "--title", "Flow activity", "--domain-source", "planning", "--frequency", "daily", "--duration-minutes", "40", "--effort-estimate", "6", "--outcome-value", "8", "--repeatable", "1", "--now", "2026-03-19T09:00:00.000Z"}, create_out, create_err, "", std::filesystem::current_path());
+    assert_true(rc == 0, "create-activity should succeed in end-to-end flow");
+
+    std::ostringstream list_out;
+    std::ostringstream list_err;
+    rc = life_orchestrator::app::run_application({"procedural-list-activities", "--data-root=" + root.string(), "--quiet-startup"}, list_out, list_err, "", std::filesystem::current_path());
+    assert_true(rc == 0, "procedural-list-activities should succeed in end-to-end flow");
+    assert_true(list_out.str().find("activity_id=activity.flow") != std::string::npos, "list activities should include created activity");
+
+    std::ostringstream state_out;
+    std::ostringstream state_err;
+    rc = life_orchestrator::app::run_application({"record-behavioral-state", "--data-root=" + root.string(), "--quiet-startup", "--available-capacity", "8", "--stress-level", "2", "--cognitive-load", "3", "--motivation-level", "7", "--recovery-status", "8", "--sleep-quality", "8", "--time-pressure", "2", "--now", "2026-03-19T09:00:00.000Z"}, state_out, state_err, "", std::filesystem::current_path());
+    assert_true(rc == 0, "record-behavioral-state should succeed in end-to-end flow");
+
+    std::ostringstream audit_out;
+    std::ostringstream audit_err;
+    rc = life_orchestrator::app::run_application({"run-audit", "--data-root=" + root.string(), "--quiet-startup", "--now", "2026-03-19T09:00:00.000Z"}, audit_out, audit_err, "", std::filesystem::current_path());
+    assert_true(rc == 0, "run-audit alias should succeed in end-to-end flow");
+    assert_true(audit_out.str().find("proposal_count=") != std::string::npos, "audit should emit proposal count");
+
+    std::ostringstream candidate_out;
+    std::ostringstream candidate_err;
+    rc = life_orchestrator::app::run_application({"generate-candidates", "--data-root=" + root.string(), "--quiet-startup", "--now", "2026-03-19T09:00:00.000Z"}, candidate_out, candidate_err, "", std::filesystem::current_path());
+    assert_true(rc == 0, "generate-candidates alias should succeed in end-to-end flow");
+    assert_true(candidate_out.str().find("candidate_count=") != std::string::npos, "candidate generation should emit candidate count");
+
+    std::ostringstream proposal_out;
+    std::ostringstream proposal_err;
+    rc = life_orchestrator::app::run_application({"generate-proposals", "--data-root=" + root.string(), "--quiet-startup", "--now", "2026-03-19T09:00:00.000Z"}, proposal_out, proposal_err, "", std::filesystem::current_path());
+    assert_true(rc == 0, "generate-proposals alias should succeed in end-to-end flow");
+    assert_true(proposal_out.str().find("proposal_count=") != std::string::npos, "proposal generation should emit proposal count");
+
+    std::ostringstream artifact_out;
+    std::ostringstream artifact_err;
+    rc = life_orchestrator::app::run_application({"scheduling-list-proposals", "--data-root=" + root.string(), "--quiet-startup"}, artifact_out, artifact_err, "", std::filesystem::current_path());
+    assert_true(rc == 0, "scheduling-list-proposals should succeed after naive flow");
+    assert_true(artifact_out.str().find("proposal_count=0") == std::string::npos, "downstream artifacts should be nonzero after valid behavioral state and audit flow");
+}
+
 void test_integration_provider_persistence_redaction_and_visibility() {
     const std::filesystem::path root = "artifacts/operator_provider";
     std::filesystem::remove_all(root);
@@ -897,6 +985,8 @@ int main() {
         test_runtime_hygiene_ignore_file();
         test_operator_alias_resolution_and_suggestions();
         test_application_command_helper_exports();
+        test_command_surface_aliases_help_and_discoverability();
+        test_end_to_end_naive_operator_flow();
         test_integration_provider_persistence_redaction_and_visibility();
         test_operator_query_provider_and_status_visibility();
     } catch (const std::exception& e) {

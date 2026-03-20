@@ -113,7 +113,74 @@ std::string value_after_equals(const std::string& arg) {
     return pos == std::string::npos ? std::string{} : arg.substr(pos + 1);
 }
 
+struct CommandHelpSpec {
+    std::string canonical_name;
+    std::vector<std::string> aliases;
+    std::vector<std::string> required_arguments;
+    std::vector<std::string> optional_arguments;
+    std::string example;
+};
+
+const std::unordered_map<ApplicationRunMode, CommandHelpSpec>& command_help_specs() {
+    static const std::unordered_map<ApplicationRunMode, CommandHelpSpec> specs = {
+        {ApplicationRunMode::BehavioralRecordState,
+         {"behavioral-record-state",
+          {"record-state", "record-behavioral-state"},
+          {"--available-capacity", "--stress-level", "--cognitive-load", "--motivation-level", "--recovery-status"},
+          {"--motivation", "--sleep-quality", "--time-pressure", "--notes", "--attributes-json", "--now"},
+          "behavioral-record-state --available-capacity 8 --stress-level 2 --cognitive-load 3 --motivation-level 7 --recovery-status 8"}},
+        {ApplicationRunMode::ProceduralUpsertActivity,
+         {"procedural-upsert-activity",
+          {"create-activity", "add-activity"},
+          {"--activity-id", "--title", "--domain-source", "--frequency", "--duration-minutes", "--effort-estimate", "--outcome-value"},
+          {"--effort", "--description", "--necessity", "--cognitive-load", "--stress-load", "--financial-cost", "--attributes-json", "--repeatable", "--now"},
+          "procedural-upsert-activity --activity-id activity.focus --title FocusBlock --domain-source planning --frequency daily --duration-minutes 45 --effort-estimate 5 --outcome-value 7"}},
+        {ApplicationRunMode::ProceduralListActivities,
+         {"procedural-list-activities",
+          {},
+          {},
+          {"--now"},
+          "procedural-list-activities"}},
+        {ApplicationRunMode::ProceduralRunAudit,
+         {"procedural-run-audit",
+          {"run-audit"},
+          {},
+          {"--audit-run-id", "--now"},
+          "procedural-run-audit --now 2026-03-19T09:00:00.000Z"}},
+        {ApplicationRunMode::SchedulingGenerateCandidates,
+         {"scheduling-generate-candidates",
+          {"generate-candidates"},
+          {},
+          {"--now"},
+          "scheduling-generate-candidates --now 2026-03-19T09:00:00.000Z"}},
+        {ApplicationRunMode::SchedulingGenerateProposals,
+         {"scheduling-generate-proposals",
+          {"generate-proposals"},
+          {},
+          {"--now"},
+          "scheduling-generate-proposals --now 2026-03-19T09:00:00.000Z"}},
+    };
+    return specs;
+}
+
+std::optional<CommandHelpSpec> command_help_spec_for_mode(ApplicationRunMode mode) {
+    const auto& specs = command_help_specs();
+    const auto it = specs.find(mode);
+    if (it == specs.end()) return std::nullopt;
+    return it->second;
+}
+
+std::vector<std::string> quick_action_labels_for_command(const std::string& command) {
+    if (command == "procedural-upsert-activity") return {"Create Activity"};
+    if (command == "behavioral-record-state") return {"Record Behavioral State"};
+    if (command == "procedural-run-audit") return {"Run Procedural Audit"};
+    if (command == "scheduling-generate-candidates") return {"Generate Scheduling Candidates"};
+    if (command == "scheduling-generate-proposals") return {"Generate Schedule Proposals"};
+    return {};
+}
+
 const std::vector<std::string>& command_names() {
+
     static const std::vector<std::string> commands = {
         "aliases", "behavioral-health-check", "behavioral-list-backlog", "behavioral-list-interventions", "behavioral-list-reevaluations",
         "behavioral-record-state", "behavioral-reevaluate-backlog", "behavioral-status", "bootstrap-check", "commands",
@@ -128,11 +195,24 @@ const std::vector<std::string>& command_names() {
 const std::vector<std::pair<std::string, std::string>>& alias_table() {
     static const std::vector<std::pair<std::string, std::string>> aliases = {
         {"activities", "procedural-list-activities"},
+        {"activity", "procedural-upsert-activity"},
+        {"add-activity", "procedural-upsert-activity"},
         {"backlog", "behavioral-list-backlog"},
+        {"candidate", "scheduling-generate-candidates"},
         {"candidates", "scheduling-list-candidates"},
+        {"create", "procedural-upsert-activity"},
+        {"create-activity", "procedural-upsert-activity"},
+        {"generate-candidates", "scheduling-generate-candidates"},
+        {"generate-proposals", "scheduling-generate-proposals"},
         {"interventions", "behavioral-list-interventions"},
+        {"proposal", "scheduling-generate-proposals"},
         {"proposals", "procedural-list-proposals"},
+        {"record", "behavioral-record-state"},
+        {"record-behavioral-state", "behavioral-record-state"},
+        {"record-state", "behavioral-record-state"},
+        {"run-audit", "procedural-run-audit"},
         {"schedule-proposals", "scheduling-list-proposals"},
+        {"state", "behavioral-record-state"},
         {"status", "status"}
     };
     return aliases;
@@ -224,32 +304,32 @@ bool is_known_global_option(const std::string& value) {
 
 bool is_allowed_command_option(ApplicationRunMode mode, const std::string& key) {
     if (mode == ApplicationRunMode::ProceduralUpsertActivity) {
-        static const std::vector<std::string> keys = {"activity-id", "title", "domain-source", "frequency", "duration-minutes", "effort", "outcome-value", "description", "necessity", "cognitive-load", "stress-load", "financial-cost", "attributes-json", "repeatable", "now"};
+        static const std::vector<std::string> keys = {"activity-id", "title", "domain-source", "frequency", "duration-minutes", "effort", "effort-estimate", "outcome-value", "description", "necessity", "cognitive-load", "stress-load", "financial-cost", "attributes-json", "repeatable", "now", "help"};
         return std::find(keys.begin(), keys.end(), key) != keys.end();
     }
     if (mode == ApplicationRunMode::ProceduralRunAudit) {
-        return key == "now" || key == "audit-run-id";
+        return key == "now" || key == "audit-run-id" || key == "help";
     }
     if (mode == ApplicationRunMode::BehavioralRecordState) {
-        static const std::vector<std::string> keys = {"available-capacity", "stress-level", "cognitive-load", "motivation", "recovery-status", "sleep-quality", "time-pressure", "notes", "now", "attributes-json"};
+        static const std::vector<std::string> keys = {"available-capacity", "stress-level", "cognitive-load", "motivation", "motivation-level", "recovery-status", "sleep-quality", "time-pressure", "notes", "now", "attributes-json", "help"};
         return std::find(keys.begin(), keys.end(), key) != keys.end();
     }
     if (mode == ApplicationRunMode::BehavioralListInterventions) return key == "status" || key == "due-by" || key == "now";
-    if (mode == ApplicationRunMode::BehavioralReevaluateBacklog) return key == "now";
+    if (mode == ApplicationRunMode::BehavioralReevaluateBacklog) return key == "now" || key == "help";
     if (mode == ApplicationRunMode::IntegrationSetProvider) return key == "provider-name" || key == "api-key" || key == "model-name";
     if (mode == ApplicationRunMode::IntegrationShowProvider) return key == "provider-name";
     if (mode == ApplicationRunMode::IntegrationTestProvider) return key == "provider-name";
     if (mode == ApplicationRunMode::ArtifactQuery) return key == "artifact-type" || key == "limit";
-    if (mode == ApplicationRunMode::OperatorQuery) return key == "input";
-    if (mode == ApplicationRunMode::Suggest) return key == "input";
-    return key == "now";
+    if (mode == ApplicationRunMode::OperatorQuery) return key == "input" || key == "help";
+    if (mode == ApplicationRunMode::Suggest) return key == "input" || key == "help";
+    return key == "now" || key == "help";
 }
 
 std::string normalize_command_option_key(const std::string& key) {
     if (key == "activity-id") return "activity_inventory_item_id";
     if (key == "domain-source") return "domain_source";
     if (key == "duration-minutes") return "duration_minutes";
-    if (key == "effort") return "effort_estimate";
+    if (key == "effort" || key == "effort-estimate") return "effort_estimate";
     if (key == "outcome-value") return "outcome_value";
     if (key == "cognitive-load") return "cognitive_load";
     if (key == "stress-load") return "stress_load";
@@ -258,6 +338,7 @@ std::string normalize_command_option_key(const std::string& key) {
     if (key == "available-capacity") return "available_capacity";
     if (key == "stress-level") return "stress_level";
     if (key == "cognitive-load") return "cognitive_load";
+    if (key == "motivation-level") return "motivation";
     if (key == "recovery-status") return "recovery_status";
     if (key == "sleep-quality") return "sleep_quality";
     if (key == "time-pressure") return "time_pressure";
@@ -488,8 +569,8 @@ ApplicationBootstrapResult resolve_bootstrap_config(const std::vector<std::strin
 
     for (std::size_t i = 0; i < args.size(); ++i) {
         const auto& arg = args[i];
-        if (is_command_name(arg)) {
-            command = arg;
+        if (is_command_name(arg) || resolve_alias(arg).has_value()) {
+            command = resolve_alias(arg).value_or(arg);
             command_set = true;
             continue;
         }
@@ -556,6 +637,8 @@ ApplicationBootstrapResult resolve_bootstrap_config(const std::vector<std::strin
         return {false, ApplicationExitCode::CommandValidationFailure, "Unexpected positional argument: " + arg, {}};
     }
 
+    if (const auto alias = resolve_alias(command); alias.has_value()) command = *alias;
+
     if (!is_command_name(command)) {
         return {false, ApplicationExitCode::CommandValidationFailure, "Unknown command: " + command, {}};
     }
@@ -616,6 +699,28 @@ ApplicationExitCode execute_command(ApplicationRuntime& runtime,
                                                "application.command",
                                                {{"exit_code", to_string(code)}}));
         return code;
+    };
+
+
+    auto emit_command_help = [&](ApplicationRunMode mode) -> std::optional<ApplicationExitCode> {
+        const auto spec = command_help_spec_for_mode(mode);
+        if (!runtime.config.command_parameters.contains("help") || runtime.config.command_parameters.at("help") != "1") return std::nullopt;
+        if (!spec.has_value()) {
+            output << "help=ok\n"
+                   << "canonical_command=" << run_mode_name(mode) << '\n';
+            return complete(ApplicationExitCode::Success, "Generic command help emitted.");
+        }
+        output << "help=ok\n"
+               << "canonical_command=" << spec->canonical_name << '\n';
+        output << "accepted_aliases=" << (spec->aliases.empty() ? "none" : std::to_string(spec->aliases.size())) << '\n';
+        for (const auto& alias : spec->aliases) output << "alias=" << alias << '\n';
+        output << "required_arguments=" << (spec->required_arguments.empty() ? "none" : std::to_string(spec->required_arguments.size())) << '\n';
+        for (const auto& arg : spec->required_arguments) output << "required=" << arg << '\n';
+        output << "optional_arguments=" << (spec->optional_arguments.empty() ? "none" : std::to_string(spec->optional_arguments.size())) << '\n';
+        for (const auto& arg : spec->optional_arguments) output << "optional=" << arg << '\n';
+        for (const auto& label : quick_action_labels_for_command(spec->canonical_name)) output << "action_label=" << label << '\n';
+        output << "example=" << spec->example << '\n';
+        return complete(ApplicationExitCode::Success, "Command help emitted.");
     };
 
     auto find_provider_record = [&](const std::string& provider_name) -> std::optional<core::IntegrationConfigurationRecord> {
@@ -685,6 +790,8 @@ ApplicationExitCode execute_command(ApplicationRuntime& runtime,
         routed_output << response_text;
         return ApplicationExitCode::Success;
     };
+
+    if (const auto help_code = emit_command_help(runtime.config.run_mode); help_code.has_value()) return *help_code;
 
     switch (runtime.config.run_mode) {
         case ApplicationRunMode::Status: {
@@ -764,7 +871,17 @@ ApplicationExitCode execute_command(ApplicationRuntime& runtime,
             static const std::vector<std::string> required = {"available_capacity", "stress_level", "cognitive_load", "motivation", "recovery_status"};
             for (const auto& key : required) {
                 if (!runtime.config.command_parameters.contains(key) || runtime.config.command_parameters.at(key).empty()) {
-                    error << "behavioral_record_state=failed\nmessage=missing_" << key << '\n';
+                    const auto accepted_flags = key == "motivation"
+                                                    ? std::string{"--motivation-level,--motivation"}
+                                                    : std::string{"--"} + std::string(key == "available_capacity"   ? "available-capacity"
+                                                                                       : key == "stress_level"      ? "stress-level"
+                                                                                       : key == "cognitive_load"    ? "cognitive-load"
+                                                                                       : key == "recovery_status"   ? "recovery-status"
+                                                                                                                       : key);
+                    error << "behavioral_record_state=failed\n"
+                          << "message=missing_required_argument\n"
+                          << "field=" << key << '\n'
+                          << "accepted_flags=" << accepted_flags << '\n';
                     return complete(ApplicationExitCode::CommandValidationFailure, "Missing required argument: " + key);
                 }
             }
