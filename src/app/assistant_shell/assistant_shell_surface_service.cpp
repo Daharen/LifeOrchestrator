@@ -1,0 +1,409 @@
+#include "app/assistant_shell/assistant_shell_surface_service.h"
+
+#include "app/app_support/action_form_registry.hpp"
+#include "app/app_support/artifact_presentation_registry.hpp"
+#include "intelligence/intent_router.hpp"
+
+#include <algorithm>
+#include <cctype>
+#include <fstream>
+#include <sstream>
+
+namespace life_orchestrator::app::assistant_shell {
+namespace {
+
+std::string trim_copy(const std::string& value) {
+    std::size_t start = 0;
+    while (start < value.size() && std::isspace(static_cast<unsigned char>(value[start]))) ++start;
+    std::size_t end = value.size();
+    while (end > start && std::isspace(static_cast<unsigned char>(value[end - 1]))) --end;
+    return value.substr(start, end - start);
+}
+
+bool starts_with(const std::string& value, const std::string& prefix) {
+    return value.rfind(prefix, 0) == 0;
+}
+
+std::string lower_copy(std::string value) {
+    std::transform(value.begin(), value.end(), value.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+    return value;
+}
+
+std::vector<std::string> split_lines(const std::string& text) {
+    std::stringstream input(text);
+    std::vector<std::string> lines;
+    std::string line;
+    while (std::getline(input, line)) lines.push_back(line);
+    return lines;
+}
+
+std::string value_for_key(const std::string& text, const std::string& key) {
+    for (const auto& line : split_lines(text)) {
+        if (starts_with(line, key + "=")) return line.substr(key.size() + 1);
+    }
+    return {};
+}
+
+std::vector<std::pair<std::string, std::string>> parse_kv_pairs(const std::string& text) {
+    std::vector<std::pair<std::string, std::string>> fields;
+    for (const auto& line : split_lines(text)) {
+        const auto pos = line.find('=');
+        if (pos == std::string::npos) continue;
+        fields.push_back({line.substr(0, pos), line.substr(pos + 1)});
+    }
+    return fields;
+}
+
+std::string sanitize_line(std::string value) {
+    std::replace(value.begin(), value.end(), '\n', ' ');
+    std::replace(value.begin(), value.end(), '\r', ' ');
+    std::replace(value.begin(), value.end(), '|', '/');
+    return value;
+}
+
+AssistantShellMessage make_text_message(const std::string& id,
+                                        const std::string& role,
+                                        AssistantShellMessageBlockType type,
+                                        const std::string& text) {
+    return {id, role, {{type, text, false, std::nullopt, std::nullopt, std::nullopt}}};
+}
+
+}  // namespace
+
+AssistantShellSurfaceService::AssistantShellSurfaceService(std::filesystem::path data_root,
+                                                           std::filesystem::path working_root,
+                                                           std::string environment_data_root)
+    : data_root_(std::move(data_root)),
+      working_root_(std::move(working_root)),
+      environment_data_root_(std::move(environment_data_root)) {}
+
+std::filesystem::path AssistantShellSurfaceService::sessions_root() const {
+    return data_root_ / "assistant_shell" / "sessions";
+}
+
+std::filesystem::path AssistantShellSurfaceService::session_file_path(const std::string& session_id) const {
+    return sessions_root() / (session_id + ".log");
+}
+
+std::string AssistantShellSurfaceService::now_string() const {
+    return core::current_timestamp_utc();
+}
+
+std::string AssistantShellSurfaceService::next_session_id() const {
+    return "assistant-shell-" + now_string();
+}
+
+AssistantShellSessionSummary AssistantShellSurfaceService::make_session_summary(const std::string& session_id) const {
+    const auto now = now_string();
+    return {session_id, now, now, "Assistant Session"};
+}
+
+std::string AssistantShellSurfaceService::default_session_title(const std::string& first_user_text) const {
+    const auto trimmed = trim_copy(first_user_text);
+    if (trimmed.empty()) return "Assistant Session";
+    return trimmed.substr(0, std::min<std::size_t>(trimmed.size(), 48));
+}
+
+AssistantShellStatusSnapshot AssistantShellSurfaceService::build_status_snapshot(const std::string& session_id,
+                                                                                  const std::string& last_action_status,
+                                                                                  AssistantShellSessionMode mode) const {
+    const auto status_result = invoke_application_command({"status", "--data-root=" + data_root_.string(), "--quiet-startup"}, environment_data_root_, working_root_);
+    const auto provider_result = invoke_application_command({"integration-list-providers", "--data-root=" + data_root_.string(), "--quiet-startup"}, environment_data_root_, working_root_);
+    const auto provider_output = provider_result.standard_output + "\n" + provider_result.standard_error;
+    return {status_result.exit_code == 0,
+            provider_output.find("provider_count=0") == std::string::npos && provider_result.exit_code == 0,
+            load_pending_confirmation(session_id).has_value() ? 1 : 0,
+            last_action_status,
+            mode};
+}
+
+std::optional<AssistantShellArtifactCard> AssistantShellSurfaceService::build_artifact_card(const std::string& artifact_type) const {
+    const auto result = invoke_application_command({"artifact.query", "--data-root=" + data_root_.string(), "--quiet-startup", "--artifact-type", artifact_type, "--limit", "1"}, environment_data_root_, working_root_);
+    if (result.exit_code != 0) return std::nullopt;
+    const auto schema = find_artifact_presentation_schema(artifact_type);
+    if (!schema.has_value()) return std::nullopt;
+    AssistantShellArtifactCard card;
+    card.artifact_type = artifact_type;
+    card.artifact_id = value_for_key(result.standard_output, "artifact_id");
+    card.title = schema->display_title;
+    for (const auto& field : schema->summary_fields) {
+        const auto value = value_for_key(result.standard_output, field.field_key);
+        if (!value.empty()) card.summary_fields.push_back({field.display_label, value});
+    }
+    if (card.artifact_id.empty() && card.summary_fields.empty()) return std::nullopt;
+    return card;
+}
+
+std::vector<AssistantShellToolPanelSection> AssistantShellSurfaceService::build_tool_panel_sections() const {
+    std::vector<AssistantShellToolPanelSection> sections;
+    auto historical = AssistantShellToolPanelSection{"historical_chats", "Historical Chats", "No prior assistant sessions yet.", {}};
+    for (const auto& session : ListSessions()) historical.items.push_back({session.session_id, session.title, session.updated_at, "Ask to reopen or summarize this session."});
+    sections.push_back(historical);
+
+    sections.push_back({"links", "Links", "Calendar, reminder, control, and routine links will appear here when available.", {}});
+
+    auto priority = AssistantShellToolPanelSection{"current_ai_priority_lists", "Current AI Priority Lists", "No current priority artifacts are available.", {}};
+    if (const auto card = build_artifact_card("behavioral_backlog"); card.has_value()) priority.items.push_back({card->artifact_id, card->title, card->summary_fields.empty() ? std::string{"Backlog artifact ready."} : card->summary_fields.front().second, "Comment on this priority list or ask for revisions."});
+    if (const auto card = build_artifact_card("behavioral_interventions"); card.has_value()) priority.items.push_back({card->artifact_id, card->title, card->summary_fields.empty() ? std::string{"Intervention artifact ready."} : card->summary_fields.front().second, "Comment on this priority list or ask for revisions."});
+    sections.push_back(priority);
+
+    auto scheduled = AssistantShellToolPanelSection{"scheduled_ai_activities", "Scheduled AI Activities", "No scheduling candidates or schedule proposals are available.", {}};
+    if (const auto card = build_artifact_card("scheduling_candidates"); card.has_value()) scheduled.items.push_back({card->artifact_id, card->title, card->summary_fields.empty() ? std::string{"Scheduling candidates ready."} : card->summary_fields.front().second, "Comment on these scheduling candidates or request modifications."});
+    if (const auto card = build_artifact_card("schedule_proposals"); card.has_value()) scheduled.items.push_back({card->artifact_id, card->title, card->summary_fields.empty() ? std::string{"Schedule proposals ready."} : card->summary_fields.front().second, "Comment on these schedule proposals or request modifications."});
+    sections.push_back(scheduled);
+
+    return sections;
+}
+
+void AssistantShellSurfaceService::persist_session(const AssistantShellSessionSummary& summary,
+                                                   const std::vector<AssistantShellMessage>& messages,
+                                                   const AssistantShellStatusSnapshot& status,
+                                                   const std::optional<PendingConfirmationState>& pending_confirmation) const {
+    std::filesystem::create_directories(sessions_root());
+    std::ofstream out(session_file_path(summary.session_id), std::ios::trunc);
+    out << "session_id=" << sanitize_line(summary.session_id) << '\n';
+    out << "created_at=" << sanitize_line(summary.created_at) << '\n';
+    out << "updated_at=" << sanitize_line(summary.updated_at) << '\n';
+    out << "title=" << sanitize_line(summary.title) << '\n';
+    out << "runtime_available=" << (status.runtime_available ? "1" : "0") << '\n';
+    out << "provider_ready=" << (status.provider_ready ? "1" : "0") << '\n';
+    out << "pending_confirmation_count=" << status.pending_confirmation_count << '\n';
+    out << "last_action_status=" << sanitize_line(status.last_action_status) << '\n';
+    out << "session_mode=" << to_string(status.session_mode) << '\n';
+    if (pending_confirmation.has_value()) {
+        out << "pending_confirmation_id=" << sanitize_line(pending_confirmation->confirmation_id) << '\n';
+        out << "pending_confirmation_lineage=" << sanitize_line(pending_confirmation->lineage) << '\n';
+        out << "pending_confirmation_args=";
+        for (std::size_t i = 0; i < pending_confirmation->execution_args.size(); ++i) {
+            if (i > 0) out << ' ';
+            out << sanitize_line(pending_confirmation->execution_args[i]);
+        }
+        out << '\n';
+    }
+    for (const auto& message : messages) {
+        for (const auto& block : message.blocks) {
+            out << "message|" << sanitize_line(message.message_id) << '|' << sanitize_line(message.role) << '|' << to_string(block.type) << '|' << sanitize_line(block.text) << '\n';
+        }
+    }
+}
+
+std::vector<AssistantShellMessage> AssistantShellSurfaceService::load_session_messages(const std::string& session_id) const {
+    std::ifstream in(session_file_path(session_id));
+    std::vector<AssistantShellMessage> messages;
+    std::string line;
+    while (std::getline(in, line)) {
+        if (!starts_with(line, "message|")) continue;
+        std::stringstream input(line);
+        std::string segment;
+        std::vector<std::string> parts;
+        while (std::getline(input, segment, '|')) parts.push_back(segment);
+        if (parts.size() < 5) continue;
+        AssistantShellMessageBlockType type = AssistantShellMessageBlockType::AssistantResponse;
+        if (parts[3] == "user_text") type = AssistantShellMessageBlockType::UserText;
+        else if (parts[3] == "execution_summary") type = AssistantShellMessageBlockType::ExecutionSummary;
+        else if (parts[3] == "confirmation") type = AssistantShellMessageBlockType::Confirmation;
+        else if (parts[3] == "artifact_card") type = AssistantShellMessageBlockType::ArtifactCard;
+        else if (parts[3] == "status_notice") type = AssistantShellMessageBlockType::StatusNotice;
+        messages.push_back({parts[1], parts[2], {{type, parts[4], false, std::nullopt, std::nullopt, std::nullopt}}});
+    }
+    return messages;
+}
+
+std::optional<AssistantShellSurfaceService::PendingConfirmationState> AssistantShellSurfaceService::load_pending_confirmation(const std::string& session_id) const {
+    std::ifstream in(session_file_path(session_id));
+    PendingConfirmationState pending;
+    bool saw_id = false;
+    std::string line;
+    while (std::getline(in, line)) {
+        if (starts_with(line, "pending_confirmation_id=")) {
+            pending.confirmation_id = line.substr(24);
+            saw_id = true;
+        } else if (starts_with(line, "pending_confirmation_lineage=")) {
+            pending.lineage = line.substr(29);
+        } else if (starts_with(line, "pending_confirmation_args=")) {
+            std::istringstream args(line.substr(26));
+            std::string token;
+            while (args >> token) pending.execution_args.push_back(token);
+        }
+    }
+    if (!saw_id) return std::nullopt;
+    return pending;
+}
+
+std::vector<AssistantShellSessionSummary> AssistantShellSurfaceService::ListSessions() const {
+    std::vector<AssistantShellSessionSummary> sessions;
+    if (!std::filesystem::exists(sessions_root())) return sessions;
+    for (const auto& entry : std::filesystem::directory_iterator(sessions_root())) {
+        if (!entry.is_regular_file()) continue;
+        std::ifstream in(entry.path());
+        AssistantShellSessionSummary summary;
+        std::string line;
+        while (std::getline(in, line)) {
+            if (starts_with(line, "session_id=")) summary.session_id = line.substr(11);
+            else if (starts_with(line, "created_at=")) summary.created_at = line.substr(11);
+            else if (starts_with(line, "updated_at=")) summary.updated_at = line.substr(11);
+            else if (starts_with(line, "title=")) summary.title = line.substr(6);
+        }
+        if (!summary.session_id.empty()) sessions.push_back(summary);
+    }
+    std::sort(sessions.begin(), sessions.end(), [](const auto& a, const auto& b) { return a.updated_at > b.updated_at; });
+    return sessions;
+}
+
+std::optional<AssistantShellStatusSnapshot> AssistantShellSurfaceService::LoadLastStatus(const std::string& session_id) const {
+    std::ifstream in(session_file_path(session_id));
+    if (!in.good()) return std::nullopt;
+    AssistantShellStatusSnapshot status;
+    std::string line;
+    while (std::getline(in, line)) {
+        if (starts_with(line, "runtime_available=")) status.runtime_available = line.substr(18) == "1";
+        else if (starts_with(line, "provider_ready=")) status.provider_ready = line.substr(15) == "1";
+        else if (starts_with(line, "pending_confirmation_count=")) status.pending_confirmation_count = std::stoi(line.substr(27));
+        else if (starts_with(line, "last_action_status=")) status.last_action_status = line.substr(19);
+        else if (starts_with(line, "session_mode=")) status.session_mode = line.substr(13) == "extended" ? AssistantShellSessionMode::Extended : AssistantShellSessionMode::Concise;
+    }
+    return status;
+}
+
+AssistantShellStartupSnapshot AssistantShellSurfaceService::StartOrResumeSession(const std::optional<std::string>& session_id) {
+    const auto id = session_id.value_or(next_session_id());
+    auto summary = make_session_summary(id);
+    auto messages = load_session_messages(id);
+    const auto loaded_status = LoadLastStatus(id);
+    auto status = loaded_status.value_or(build_status_snapshot(id, "Ready", AssistantShellSessionMode::Concise));
+    if (messages.empty()) {
+        std::ostringstream greeting;
+        greeting << "Hello. Runtime is " << (status.runtime_available ? "available" : "unavailable")
+                 << ", provider is " << (status.provider_ready ? "ready" : "not configured")
+                 << ", and session mode is " << to_string(status.session_mode) << ".";
+        messages.push_back(make_text_message("startup-greeting", "assistant", AssistantShellMessageBlockType::AssistantResponse, greeting.str()));
+        messages.push_back(make_text_message("startup-status", "system", AssistantShellMessageBlockType::StatusNotice, "Use the composer to ask for a command, artifact summary, or guided action."));
+        persist_session(summary, messages, status, std::nullopt);
+    }
+    if (summary.title == "Assistant Session" && messages.size() > 2) summary.title = "Assistant Session";
+    return {summary, status, {"Ask Life Orchestrator to help with the next step.", true, false}, messages, build_tool_panel_sections()};
+}
+
+AssistantShellSubmissionResult AssistantShellSurfaceService::SubmitUserText(const AssistantShellSubmissionRequest& request) {
+    auto summary = make_session_summary(request.session_id);
+    auto messages = load_session_messages(request.session_id);
+    messages.push_back(make_text_message("user-" + now_string(), "user", AssistantShellMessageBlockType::UserText, request.user_text));
+
+    auto append_and_persist = [&](const AssistantShellMessage& assistant_message,
+                                  const AssistantShellStatusSnapshot& status,
+                                  const std::optional<PendingConfirmationState>& pending) {
+        messages.push_back(assistant_message);
+        summary.updated_at = now_string();
+        if (summary.title == "Assistant Session") summary.title = default_session_title(request.user_text);
+        persist_session(summary, messages, status, pending);
+    };
+
+    const auto command_result = invoke_application_command({"operator-query", "--data-root=" + data_root_.string(), "--quiet-startup", "--input", request.user_text}, environment_data_root_, working_root_);
+    const auto combined = command_result.standard_output + "\n" + command_result.standard_error;
+
+    AssistantShellExecutionSummary exec_summary;
+    exec_summary.provider_used = combined.find("provider_request_provider_name=") != std::string::npos;
+
+    if (combined.find("operator_query=failed\nmessage=no_provider_configured") != std::string::npos) {
+        exec_summary.resolution_path = "constrained_intent_routing";
+        exec_summary.selected_route = "provider_unavailable";
+        exec_summary.confidence = 0.0;
+        exec_summary.confirmation_required = false;
+        exec_summary.explanation = "Natural-language interpretation needs provider transport, so the shell returned a remediation path instead.";
+        AssistantShellMessage assistant{"assistant-" + now_string(),
+                                        "assistant",
+                                        {{AssistantShellMessageBlockType::AssistantResponse, "I can still run exact commands, but provider-backed interpretation is not configured yet. Configure a provider to enable broader routing.", false, std::nullopt, std::nullopt, std::nullopt},
+                                         {AssistantShellMessageBlockType::ExecutionSummary, "Thinking (Extended)", true, exec_summary, std::nullopt, std::nullopt}}};
+        auto status = build_status_snapshot(request.session_id, "Provider setup required", AssistantShellSessionMode::Concise);
+        append_and_persist(assistant, status, std::nullopt);
+        return {true, request.session_id, {messages.back()}, status, build_tool_panel_sections(), std::nullopt};
+    }
+
+    if (command_result.exit_code == 0 && combined.find("operator_query=failed") == std::string::npos) {
+        exec_summary.resolution_path = combined.find("provider_request_provider_name=") != std::string::npos ? "constrained_intent_routing" : "exact_command_resolution";
+        exec_summary.selected_route = value_for_key(combined, exec_summary.provider_used ? "matched_command" : "intent_route_command");
+        if (exec_summary.selected_route.empty()) exec_summary.selected_route = value_for_key(combined, "matched_command");
+        exec_summary.confidence = exec_summary.provider_used ? std::stod(value_for_key(combined, "confidence").empty() ? "0.0" : value_for_key(combined, "confidence")) : 1.0;
+        exec_summary.confirmation_required = value_for_key(combined, "requires_confirmation") == "true";
+        exec_summary.explanation = exec_summary.provider_used ? value_for_key(combined, "reasoning_summary") : "The shell matched an exact command or alias through the authoritative helper surface first.";
+        for (const auto& field : parse_kv_pairs(combined)) {
+            if (starts_with(field.first, "refreshed_artifact_type")) exec_summary.artifact_refreshes.push_back(field.second);
+        }
+
+        const auto user_message = value_for_key(combined, "user_facing_message");
+        const auto canonical = value_for_key(combined, "canonical_command");
+        const auto response_text = !user_message.empty() ? user_message : (!canonical.empty() ? "Completed " + canonical + "." : "Completed the requested action.");
+        AssistantShellMessage assistant{"assistant-" + now_string(), "assistant", {}};
+        assistant.blocks.push_back({AssistantShellMessageBlockType::AssistantResponse, response_text, false, std::nullopt, std::nullopt, std::nullopt});
+
+        std::optional<PendingConfirmationState> pending;
+        std::optional<AssistantShellConfirmationRequest> confirmation;
+        if (exec_summary.confirmation_required) {
+            std::vector<std::string> args;
+            std::istringstream in(value_for_key(combined, "args"));
+            std::string token;
+            while (in >> token) args.push_back(token);
+            if (!args.empty()) {
+                pending = PendingConfirmationState{"confirm-" + now_string(), args, exec_summary.selected_route};
+                confirmation = AssistantShellConfirmationRequest{pending->confirmation_id,
+                                                                "Confirm action",
+                                                                response_text,
+                                                                pending->execution_args,
+                                                                pending->lineage};
+                assistant.blocks.push_back({AssistantShellMessageBlockType::Confirmation, "Confirmation required before execution.", false, std::nullopt, confirmation, std::nullopt});
+            }
+        }
+        assistant.blocks.push_back({AssistantShellMessageBlockType::ExecutionSummary, "Thinking (Extended)", true, exec_summary, std::nullopt, std::nullopt});
+        if (const auto provider_card = build_artifact_card("provider_config_summary"); provider_card.has_value()) {
+            if (exec_summary.selected_route == "integration-set-provider" || exec_summary.selected_route == "integration-list-providers" || combined.find("provider_name=") != std::string::npos) {
+                assistant.blocks.push_back({AssistantShellMessageBlockType::ArtifactCard, provider_card->title, false, std::nullopt, std::nullopt, *provider_card});
+            }
+        }
+
+        auto status = build_status_snapshot(request.session_id, exec_summary.confirmation_required ? "Awaiting confirmation" : "Completed", AssistantShellSessionMode::Concise);
+        if (pending.has_value()) status.pending_confirmation_count = 1;
+        append_and_persist(assistant, status, pending);
+        return {true, request.session_id, {messages.back()}, status, build_tool_panel_sections(), confirmation};
+    }
+
+    exec_summary.resolution_path = "deterministic_fallback";
+    exec_summary.selected_route = "unmatched";
+    exec_summary.confidence = 0.0;
+    exec_summary.explanation = "No exact command or supported interpreted route could be completed.";
+    AssistantShellMessage assistant{"assistant-" + now_string(),
+                                    "assistant",
+                                    {{AssistantShellMessageBlockType::AssistantResponse, "I couldn't complete that request. Try an exact command, an alias, or open Help for command discovery.", false, std::nullopt, std::nullopt, std::nullopt},
+                                     {AssistantShellMessageBlockType::ExecutionSummary, "Thinking (Extended)", true, exec_summary, std::nullopt, std::nullopt}}};
+    auto status = build_status_snapshot(request.session_id, "Needs clarification", AssistantShellSessionMode::Concise);
+    append_and_persist(assistant, status, std::nullopt);
+    return {false, request.session_id, {messages.back()}, status, build_tool_panel_sections(), std::nullopt};
+}
+
+AssistantShellConfirmationResult AssistantShellSurfaceService::ResolveConfirmation(const std::string& session_id,
+                                                                                   const std::string& confirmation_id,
+                                                                                   bool accepted) {
+    const auto pending = load_pending_confirmation(session_id);
+    if (!pending.has_value() || pending->confirmation_id != confirmation_id) {
+        return {false, confirmation_id, "No matching confirmation request was found.", std::nullopt};
+    }
+    auto summary = make_session_summary(session_id);
+    auto messages = load_session_messages(session_id);
+    AssistantShellExecutionSummary exec_summary{"confirmation_resolution", pending->lineage, 1.0, false, false, {}, "The shell executed the previously confirmed authoritative route."};
+    std::string assistant_message;
+    if (accepted) {
+        auto args = pending->execution_args;
+        args.push_back("--data-root=" + data_root_.string());
+        args.push_back("--quiet-startup");
+        const auto result = invoke_application_command(args, environment_data_root_, working_root_);
+        assistant_message = result.exit_code == 0 ? "Confirmed and executed through the authoritative runtime path." : "Confirmation was accepted, but execution failed.";
+    } else {
+        assistant_message = "Confirmation declined. No runtime action was executed.";
+    }
+    messages.push_back({"assistant-confirm-" + now_string(), "assistant", {{AssistantShellMessageBlockType::AssistantResponse, assistant_message, false, std::nullopt, std::nullopt, std::nullopt}, {AssistantShellMessageBlockType::ExecutionSummary, "Thinking (Extended)", true, exec_summary, std::nullopt, std::nullopt}}});
+    summary.updated_at = now_string();
+    auto status = build_status_snapshot(session_id, accepted ? "Confirmed" : "Cancelled", AssistantShellSessionMode::Concise);
+    persist_session(summary, messages, status, std::nullopt);
+    return {accepted, confirmation_id, assistant_message, exec_summary};
+}
+
+}  // namespace life_orchestrator::app::assistant_shell
