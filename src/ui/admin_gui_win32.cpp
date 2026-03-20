@@ -218,13 +218,13 @@ LRESULT CALLBACK action_dialog_proc(HWND hwnd, UINT message, WPARAM w_param, LPA
                     for (const auto& option : field.options) {
                         const auto widened = widen(option.label);
                         const auto idx = SendMessageW(input, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(widened.c_str()));
-                        SendMessageW(input, CB_SETITEMDATA, idx, reinterpret_cast<LPARAM>(index));
+                        SendMessageW(input, CB_SETITEMDATA, static_cast<WPARAM>(idx), static_cast<LPARAM>(index));
                     }
                     int select_index = 0;
                     for (std::size_t option_index = 0; option_index < field.options.size(); ++option_index) {
                         if (field.options[option_index].value == field.example_value) select_index = static_cast<int>(option_index);
                     }
-                    SendMessageW(input, CB_SETCURSEL, select_index, 0);
+                    SendMessageW(input, CB_SETCURSEL, static_cast<WPARAM>(select_index), 0);
                 } else if (!field.example_value.empty()) set_edit_placeholder(input, widen(field.example_value));
                 state->fields.push_back({field, label, input, help});
             }
