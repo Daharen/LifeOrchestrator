@@ -51,12 +51,17 @@ struct QuickCommand {
 const std::vector<QuickCommand>& quick_commands() {
     static const std::vector<QuickCommand> commands = {
         {L"Status", {"status"}},
+        {L"Create Activity", {"procedural-upsert-activity", "--help"}},
         {L"Activity Inventory", {"procedural-list-activities"}},
+        {L"Record Behavioral State", {"behavioral-record-state", "--help"}},
+        {L"Run Procedural Audit", {"procedural-run-audit"}},
         {L"Procedural Proposals", {"procedural-list-proposals"}},
         {L"Behavioral Backlog", {"behavioral-list-backlog"}},
         {L"Behavioral Interventions", {"behavioral-list-interventions"}},
         {L"Behavioral Reevaluations", {"behavioral-list-reevaluations"}},
+        {L"Generate Scheduling Candidates", {"scheduling-generate-candidates"}},
         {L"Scheduling Candidates", {"scheduling-list-candidates"}},
+        {L"Generate Schedule Proposals", {"scheduling-generate-proposals"}},
         {L"Schedule Proposals", {"scheduling-list-proposals"}},
         {L"Provider Summary", {"integration-list-providers"}},
         {L"Commands", {"commands"}},
