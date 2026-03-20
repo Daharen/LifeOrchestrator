@@ -92,6 +92,14 @@ void set_control_text(HWND handle, const std::string& value) {
     SetWindowTextW(handle, widen(value).c_str());
 }
 
+void send_listbox_add_string(HWND handle, const std::wstring& value) {
+    SendMessageW(handle, LB_ADDSTRING, 0, reinterpret_cast<LPARAM>(value.c_str()));
+}
+
+void send_combobox_add_string(HWND handle, const std::wstring& value) {
+    SendMessageW(handle, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(value.c_str()));
+}
+
 std::string get_control_text(HWND handle) {
     const int length = GetWindowTextLengthW(handle);
     std::wstring buffer(static_cast<std::size_t>(length + 1), L'\0');
@@ -135,7 +143,7 @@ void refresh_suggestions(HWND hwnd) {
     const auto suggestions = life_orchestrator::app::suggest_application_commands(get_control_text(state->palette_edit));
     for (const auto& suggestion : suggestions) {
         const auto widened = widen(suggestion);
-        SendMessageW(state->suggestion_list, LB_ADDSTRING, 0, reinterpret_cast<LPARAM>(widened.c_str()));
+        send_listbox_add_string(state->suggestion_list, widened);
     }
     if (!suggestions.empty()) {
         SendMessageW(state->suggestion_list, LB_SETCURSEL, 0, 0);
@@ -278,7 +286,7 @@ LRESULT CALLBACK window_proc(HWND hwnd, UINT message, WPARAM w_param, LPARAM l_p
                                                  nullptr);
 
             for (const auto& command : quick_commands()) {
-                SendMessageW(state->quick_combo, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(command.label));
+                send_combobox_add_string(state->quick_combo, command.label);
             }
             SendMessageW(state->quick_combo, CB_SETCURSEL, 0, 0);
 
