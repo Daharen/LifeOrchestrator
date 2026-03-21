@@ -810,15 +810,23 @@ ApplicationExitCode execute_command(ApplicationRuntime& runtime,
 
     auto emit_provider_record = [&](const core::IntegrationConfigurationRecord& record) {
         const auto [secret, reference] = provider_secret_status(record);
+        const auto secret_source = default_if_empty(record.non_secret_settings.contains("secret_source") ? record.non_secret_settings.at("secret_source") : std::string{}, record.credential_storage_mode == core::CredentialStorageMode::InlinePlaceholderOnly ? "env" : "direct");
+        const auto env_var_name = secret_source == "env"
+                                      ? default_if_empty(record.non_secret_settings.contains("env_var_name") ? record.non_secret_settings.at("env_var_name") : std::string{}, "unset")
+                                      : std::string{"unset"};
+        const auto existing_secret_reference = secret_source == "existing"
+                                                   ? default_if_empty(record.non_secret_settings.contains("existing_secret_reference") ? record.non_secret_settings.at("existing_secret_reference") : std::string{}, "unset")
+                                                   : std::string{"unset"};
         output << "provider_name=" << record.integration_id << '\n'
                << "display_name=" << record.display_name << '\n'
                << "enabled=" << (record.enabled ? "true" : "false") << '\n'
                << "status=" << core::to_string(record.status) << '\n'
                << "model_name=" << default_if_empty(record.non_secret_settings.contains("model_name") ? record.non_secret_settings.at("model_name") : std::string{}, "unset") << '\n'
-               << "secret_source=" << default_if_empty(record.non_secret_settings.contains("secret_source") ? record.non_secret_settings.at("secret_source") : std::string{}, record.credential_storage_mode == core::CredentialStorageMode::InlinePlaceholderOnly ? "env" : "direct") << '\n'
-               << "env_var_name=" << default_if_empty(record.non_secret_settings.contains("env_var_name") ? record.non_secret_settings.at("env_var_name") : std::string{}, "unset") << '\n'
+               << "secret_source=" << secret_source << '\n'
+               << "env_var_name=" << env_var_name << '\n'
+               << "existing_secret_reference=" << existing_secret_reference << '\n'
                << "credential_storage_mode=" << core::to_string(record.credential_storage_mode) << '\n'
-               << "credential_reference=" << reference << '\n'
+               << "credential_reference=" << default_if_empty(reference, "unset") << '\n'
                << "api_key_redacted=" << redact_secret(secret) << '\n'
                << "updated_at=" << record.updated_at << '\n'
                << "version=" << record.version << '\n';
@@ -1483,10 +1491,12 @@ ApplicationExitCode execute_command(ApplicationRuntime& runtime,
             }
             output << "integration_set_provider=ok\n"
                    << "provider_name=" << provider_name << '\n'
+                   << "display_name=" << record.display_name << '\n'
                    << "model_name=" << record.non_secret_settings.at("model_name") << '\n'
                    << "secret_source=" << secret_source << '\n'
-                   << "env_var_name=" << default_if_empty(record.non_secret_settings.contains("env_var_name") ? record.non_secret_settings.at("env_var_name") : std::string{}, "unset") << '\n'
-                   << "credential_reference=" << record.credential_reference << '\n'
+                   << "env_var_name=" << (secret_source == "env" ? default_if_empty(record.non_secret_settings.contains("env_var_name") ? record.non_secret_settings.at("env_var_name") : std::string{}, "unset") : std::string{"unset"}) << '\n'
+                   << "existing_secret_reference=" << (secret_source == "existing" ? default_if_empty(record.non_secret_settings.contains("existing_secret_reference") ? record.non_secret_settings.at("existing_secret_reference") : std::string{}, "unset") : std::string{"unset"}) << '\n'
+                   << "credential_reference=" << default_if_empty(record.credential_reference, "unset") << '\n'
                    << "api_key_redacted=" << redacted_secret << '\n'
                    << "version=" << record.version << '\n';
             return complete(ApplicationExitCode::Success, "Integration provider configured.");
@@ -1508,12 +1518,22 @@ ApplicationExitCode execute_command(ApplicationRuntime& runtime,
                    << "provider_count=" << providers.size() << '\n';
             for (const auto& record : providers) {
                 const auto [secret, reference] = provider_secret_status(record);
+                const auto secret_source = default_if_empty(record.non_secret_settings.contains("secret_source") ? record.non_secret_settings.at("secret_source") : std::string{}, record.credential_storage_mode == core::CredentialStorageMode::InlinePlaceholderOnly ? "env" : "direct");
+                const auto env_var_name = secret_source == "env"
+                                              ? default_if_empty(record.non_secret_settings.contains("env_var_name") ? record.non_secret_settings.at("env_var_name") : std::string{}, "unset")
+                                              : std::string{"unset"};
+                const auto existing_secret_reference = secret_source == "existing"
+                                                           ? default_if_empty(record.non_secret_settings.contains("existing_secret_reference") ? record.non_secret_settings.at("existing_secret_reference") : std::string{}, "unset")
+                                                           : std::string{"unset"};
                 emit_ordered_kv_block(output, {{"provider_name", record.integration_id},
+                                               {"display_name", default_if_empty(record.display_name, "unset")},
                                                {"enabled", record.enabled ? "true" : "false"},
                                                {"status", core::to_string(record.status)},
                                                {"model_name", default_if_empty(record.non_secret_settings.contains("model_name") ? record.non_secret_settings.at("model_name") : std::string{}, "unset")},
-                                               {"secret_source", default_if_empty(record.non_secret_settings.contains("secret_source") ? record.non_secret_settings.at("secret_source") : std::string{}, record.credential_storage_mode == core::CredentialStorageMode::InlinePlaceholderOnly ? "env" : "direct")},
-                                               {"credential_reference", reference},
+                                               {"secret_source", secret_source},
+                                               {"env_var_name", env_var_name},
+                                               {"existing_secret_reference", existing_secret_reference},
+                                               {"credential_reference", default_if_empty(reference, "unset")},
                                                {"api_key_redacted", redact_secret(secret)}});
             }
             return complete(ApplicationExitCode::Success, "Integration providers listed.");

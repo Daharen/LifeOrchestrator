@@ -10,6 +10,9 @@ struct ProviderSetupProviderSummary {
     std::string display_name;
     std::string model_name;
     std::string secret_source;
+    std::string env_var_name;
+    std::string existing_secret_reference;
+    std::string credential_reference;
     std::string redacted_secret_status;
     bool enabled = false;
     std::string status;

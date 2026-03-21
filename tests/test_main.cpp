@@ -1548,6 +1548,7 @@ void test_inference_transport_contracts_and_redaction() {
     assert_true(parsed.has_value() && parsed->find("mode=proposed") != std::string::npos, "structured json schema output should normalize to key-value format");
     assert_true(fake->requests.back().body.find("Authoritative command catalog") != std::string::npos, "request builder should include the authoritative command catalog grounding block");
     assert_true(fake->requests.back().body.find("Few-shot examples") != std::string::npos, "request builder should include the compact few-shot grounding block");
+    assert_true(fake->requests.back().body.find("oneOf") == std::string::npos, "request builder schema should not use oneOf for OpenAI compatibility");
 
     fake->next_response = make_http_response(200, R"({"output_text":"{\"mode\":\"command\",\"matched_command\":\"status\",\"args\":\"status\",\"confidence\":\"1.3\",\"reasoning_summary\":\"Healthy\",\"requires_confirmation\":\"no\",\"closest_commands\":[\"status\",\"help\"],\"user_facing_message\":\"Ready\"}","input_tokens":1,"output_tokens":1,"total_tokens":2})", {}, true, true, "read_body", std::nullopt, {}, "application/json", "req-variant");
     const auto variant = parse_openai_structured_output_to_key_value(fake->next_response.body);
@@ -1582,8 +1583,15 @@ void test_provider_validation_paths_and_setup_service() {
     assert_true(err.str().find("TEST_KEY_123") == std::string::npos, "unsupported provider validation should not leak secrets");
 
     setup::ProviderSetupService service(root, std::filesystem::current_path(), "");
-    const auto providers = service.ListProviders();
+    auto providers = service.ListProviders();
     assert_true(!providers.empty(), "provider setup service should list configured providers");
+    const auto* openai_provider = [&]() -> const setup::ProviderSetupProviderSummary* {
+        for (const auto& provider : providers) if (provider.provider_name == "openai") return &provider;
+        return nullptr;
+    }();
+    assert_true(openai_provider != nullptr, "provider setup service should expose openai provider metadata");
+    assert_true(openai_provider != nullptr && openai_provider->env_var_name == "MISSING_ENV", "provider setup service should preserve env-var references on reload");
+    assert_true(openai_provider != nullptr && openai_provider->display_name == "openai", "provider setup service should preserve display names on reload");
     const auto openai_test = service.TestProvider("openai");
     assert_true(!openai_test.ok, "provider setup service should surface missing-secret failures");
     const auto stub_test = service.TestProvider("stub");
@@ -1615,6 +1623,46 @@ void test_provider_setup_controller_round_trip() {
     assert_true(test_result.safe_details.find("structured_result_returned=true") != std::string::npos, "controller test should preserve safe readiness details");
 }
 
+
+
+void test_provider_setup_service_round_trip_modes() {
+    namespace setup = life_orchestrator::app::provider_setup;
+    const std::filesystem::path root = "artifacts/provider_setup_round_trip_modes";
+    std::filesystem::remove_all(root);
+    setenv("LIFE_ORCHESTRATOR", "ROUND_TRIP_SECRET_456", 1);
+
+    setup::ProviderSetupService service(root, std::filesystem::current_path(), "");
+
+    auto env_save = service.SaveProvider({"openai", "OpenAI Env", "gpt-5", "env", "", "LIFE_ORCHESTRATOR", "", true});
+    assert_true(env_save.exit_code == 0, "provider setup service should save env-backed providers");
+    auto providers = service.ListProviders();
+    const auto* env_provider = [&]() -> const setup::ProviderSetupProviderSummary* {
+        for (const auto& provider : providers) if (provider.provider_name == "openai") return &provider;
+        return nullptr;
+    }();
+    assert_true(env_provider != nullptr, "env-backed provider should round-trip through provider listing");
+    assert_true(env_provider != nullptr && env_provider->display_name == "OpenAI Env", "display_name should survive provider round-trip");
+    assert_true(env_provider != nullptr && env_provider->env_var_name == "LIFE_ORCHESTRATOR", "env_var_name should survive env-mode provider round-trip");
+    assert_true(env_provider != nullptr && env_provider->existing_secret_reference == "unset", "env-mode provider should leave existing secret reference unset");
+    assert_true(env_provider != nullptr && env_provider->redacted_secret_status.find("***") != std::string::npos, "env-mode provider list should keep secrets redacted");
+
+    auto existing_save = service.SaveProvider({"anthropic", "Anthropic Existing", "claude-3-7-sonnet", "existing", "", "", "config/providers/OpenAI.secret", true});
+    assert_true(existing_save.exit_code == 0, "provider setup service should save existing-secret providers");
+    std::filesystem::create_directories(root / "config" / "providers");
+    {
+        std::ofstream secret(root / "config" / "providers" / "OpenAI.secret", std::ios::trunc);
+        secret << "EXISTING_SECRET_123";
+    }
+    providers = service.ListProviders();
+    const auto* existing_provider = [&]() -> const setup::ProviderSetupProviderSummary* {
+        for (const auto& provider : providers) if (provider.provider_name == "anthropic") return &provider;
+        return nullptr;
+    }();
+    assert_true(existing_provider != nullptr, "existing-secret provider should round-trip through provider listing");
+    assert_true(existing_provider != nullptr && existing_provider->display_name == "Anthropic Existing", "display_name should survive existing-mode provider round-trip");
+    assert_true(existing_provider != nullptr && existing_provider->existing_secret_reference == "config/providers/OpenAI.secret", "existing_secret_reference should survive existing-mode provider round-trip");
+    assert_true(existing_provider != nullptr && existing_provider->env_var_name == "unset", "existing-mode provider should leave env-var metadata unset");
+}
 
 void test_openai_transport_failure_and_registry_behavior() {
     using namespace life_orchestrator::integration::inference;
@@ -1782,6 +1830,7 @@ int main() {
         test_assistant_shell_session_persistence_and_reload();
         test_inference_transport_contracts_and_redaction();
         test_provider_validation_paths_and_setup_service();
+        test_provider_setup_service_round_trip_modes();
         test_provider_setup_controller_round_trip();
         test_openai_transport_failure_and_registry_behavior();
         test_openai_transport_diagnostic_matrix();
