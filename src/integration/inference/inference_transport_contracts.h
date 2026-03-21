@@ -38,6 +38,12 @@ struct InferenceTransportError {
     std::string message;
     int status_code = 0;
     bool retryable = false;
+    bool outbound_request_attempted = false;
+    std::string failure_stage;
+    std::string request_id;
+    std::string response_content_type;
+    std::string safe_error_summary;
+    std::string safe_body_preview;
 };
 
 struct InferenceTransportResult {
@@ -64,11 +70,17 @@ struct ProviderHealthCheckResult {
     bool metadata_loaded = false;
     bool secret_resolved = false;
     bool outbound_request_attempted = false;
+    std::string failure_stage;
+    int http_status = 0;
+    std::string response_request_id;
+    std::string response_content_type;
+    std::string safe_response_preview;
     std::optional<InferenceTransportResult> inference_result;
     std::optional<InferenceTransportError> error;
 };
 
 std::string redact_secret(const std::string& value);
 std::string summarize_transport_error(const InferenceTransportError& error);
+std::string sanitize_diagnostic_text(const std::string& value, std::size_t max_length = 512);
 
 }  // namespace life_orchestrator::integration::inference

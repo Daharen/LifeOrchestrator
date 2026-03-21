@@ -1491,22 +1491,42 @@ ApplicationExitCode execute_command(ApplicationRuntime& runtime,
             const auto [api_key, secret_reference] = provider_secret_status(*record);
             const auto health = inference_client.CheckProvider(*record, api_key, "provider-health-" + core::current_timestamp_utc());
             if (!health.ok) {
+                const auto failure_class = health.error.has_value() ? health.error->failure_class : std::string{"transport_failure"};
+                const auto http_status = health.http_status > 0 ? std::to_string(health.http_status) : std::string{"none"};
+                const auto failure_stage = default_if_empty(health.failure_stage, "none");
+                const auto request_id = default_if_empty(health.response_request_id, "none");
+                const auto response_preview = default_if_empty(health.safe_response_preview, "none");
+                const auto summary = std::string{"failed failure_class="} + failure_class + " http_status=" + http_status + " failure_stage=" + failure_stage + " request_id=" + request_id + " outbound_request_attempted=" + (health.outbound_request_attempted ? "true" : "false") + " response_preview=" + response_preview;
                 error << "integration_test_provider=failed\n"
-                      << "message=" << (health.error.has_value() ? health.error->failure_class : std::string{"transport_failure"}) << '\n'
+                      << "message=" << failure_class << '\n'
+                      << "summary=" << summary << '\n'
                       << "provider_name=" << record->integration_id << '\n'
                       << "secret_reference=" << secret_reference << '\n'
                       << "metadata_loaded=" << (health.metadata_loaded ? "true" : "false") << '\n'
                       << "secret_resolved=" << (health.secret_resolved ? "true" : "false") << '\n'
-                      << "outbound_request_attempted=" << (health.outbound_request_attempted ? "true" : "false") << '\n';
+                      << "outbound_request_attempted=" << (health.outbound_request_attempted ? "true" : "false") << '\n'
+                      << "failure_class=" << failure_class << '\n'
+                      << "http_status=" << http_status << '\n'
+                      << "failure_stage=" << failure_stage << '\n'
+                      << "request_id=" << request_id << '\n'
+                      << "response_content_type=" << default_if_empty(health.response_content_type, "none") << '\n'
+                      << "response_preview=" << response_preview << '\n';
                 return complete(ApplicationExitCode::RuntimeOperationFailure, "Integration provider readiness failed.");
             }
             output << "integration_test_provider=ok\n"
+                   << "summary=ok failure_class=none http_status=none failure_stage=none request_id=none outbound_request_attempted=" << (health.outbound_request_attempted ? "true" : "false") << " response_preview=none\n"
                    << "provider_name=" << record->integration_id << '\n'
                    << "model_name=" << default_if_empty(record->non_secret_settings.contains("model_name") ? record->non_secret_settings.at("model_name") : std::string{}, "unset") << '\n'
                    << "metadata_loaded=" << (health.metadata_loaded ? "true" : "false") << '\n'
                    << "secret_resolved=" << (health.secret_resolved ? "true" : "false") << '\n'
                    << "outbound_request_attempted=" << (health.outbound_request_attempted ? "true" : "false") << '\n'
                    << "structured_result_returned=" << (health.inference_result.has_value() && health.inference_result->ok ? "true" : "false") << '\n'
+                   << "failure_class=none\n"
+                   << "http_status=none\n"
+                   << "failure_stage=none\n"
+                   << "request_id=none\n"
+                   << "response_content_type=none\n"
+                   << "response_preview=none\n"
                    << "transport=" << health.transport_name << '\n';
             return complete(ApplicationExitCode::Success, "Integration provider readiness succeeded.");
         }

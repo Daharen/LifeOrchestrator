@@ -14,9 +14,9 @@ std::string lower_copy(std::string value) {
 }
 
 std::string schema_json() {
-    return R"({"name":"intent_routing_result","schema":{"type":"object","additionalProperties":false,"required":["mode","matched_command","args","confidence","reasoning_summary","requires_confirmation","closest_commands","user_facing_message"],"properties":{"mode":{"type":"string"},"matched_command":{"type":"string"},"args":{"type":"string"},"confidence":{"type":"number"},"reasoning_summary":{"type":"string"},"requires_confirmation":{"type":"boolean"},"closest_commands":{"type":"string"},"user_facing_message":{"type":"string"}}},"strict":true})";
+    return R"({"type":"object","additionalProperties":false,"required":["mode","matched_command","args","confidence","reasoning_summary","requires_confirmation","closest_commands","user_facing_message"],"properties":{"mode":{"type":"string"},"matched_command":{"type":"string"},"args":{"type":"string"},"confidence":{"type":"number"},"reasoning_summary":{"type":"string"},"requires_confirmation":{"type":"boolean"},"closest_commands":{"type":"string"},"user_facing_message":{"type":"string"}}})";
 }
-}
+}  // namespace
 
 std::string default_openai_responses_endpoint() {
     return "https://api.openai.com/v1/responses";
@@ -32,21 +32,23 @@ HttpRequestSpec build_openai_responses_request(const InferenceTransportRequest& 
     http_request.url = request.options.endpoint_url.empty() ? default_openai_responses_endpoint() : request.options.endpoint_url;
     http_request.method = "POST";
     http_request.timeout_seconds = 30;
-    http_request.headers = {
-        {"Authorization", "Bearer " + request.options.api_key},
-        {"Content-Type", "application/json"}
-    };
+    http_request.headers = {{"Authorization", "Bearer " + request.options.api_key},
+                            {"Content-Type", "application/json"},
+                            {"Accept", "application/json"},
+                            {"User-Agent", "LifeOrchestrator/2.0"}};
 
     std::ostringstream input;
     input << '[';
     for (std::size_t i = 0; i < request.messages.size(); ++i) {
         if (i > 0) input << ',';
-        input << "{\"role\":\"" << json_escape(request.messages[i].role) << "\",\"content\":[{\"type\":\"input_text\",\"text\":\"" << json_escape(request.messages[i].content) << "\"}]}";
+        input << "{\"role\":\"" << json_escape(request.messages[i].role)
+              << "\",\"content\":[{\"type\":\"input_text\",\"text\":\"" << json_escape(request.messages[i].content)
+              << "\"}]}";
     }
     input << ']';
 
     std::ostringstream body;
-    body << "{";
+    body << '{';
     body << "\"model\":\"" << json_escape(request.options.model_name) << "\",";
     body << "\"input\":" << input.str() << ',';
     body << "\"text\":{\"format\":{\"type\":\"json_schema\",\"name\":\"intent_routing_result\",\"schema\":" << schema_json() << ",\"strict\":true}}";
