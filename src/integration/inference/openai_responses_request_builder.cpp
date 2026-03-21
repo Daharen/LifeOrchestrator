@@ -16,6 +16,13 @@ std::string lower_copy(std::string value) {
 std::string schema_json() {
     return R"({"type":"object","additionalProperties":false,"required":["mode","matched_command","args","confidence","reasoning_summary","requires_confirmation","closest_commands","user_facing_message"],"properties":{"mode":{"type":"string"},"matched_command":{"type":"string"},"args":{"type":"string"},"confidence":{"type":"number"},"reasoning_summary":{"type":"string"},"requires_confirmation":{"type":"boolean"},"closest_commands":{"type":"string"},"user_facing_message":{"type":"string"}}})";
 }
+
+std::string grounding_instruction() {
+    return "You are the intent router. Return only the canonical routing JSON object with fields mode, matched_command, args, confidence, reasoning_summary, requires_confirmation, closest_commands, user_facing_message. "
+           "Allowed mode values: proposed or failure. matched_command must be either empty or one of the command names supplied in the prompt. "
+           "Do not invent commands. For a household task such as Create laundry task, map to procedural-upsert-activity when grounded. "
+           "For vague unsupported requests such as What can you do?, return mode failure with a helpful user_facing_message that nudges toward Help or exact commands.";
+}
 }  // namespace
 
 std::string default_openai_responses_endpoint() {
@@ -41,8 +48,9 @@ HttpRequestSpec build_openai_responses_request(const InferenceTransportRequest& 
     input << '[';
     for (std::size_t i = 0; i < request.messages.size(); ++i) {
         if (i > 0) input << ',';
+        const auto content = request.messages[i].role == "system" ? grounding_instruction() + "\n" + request.messages[i].content : request.messages[i].content;
         input << "{\"role\":\"" << json_escape(request.messages[i].role)
-              << "\",\"content\":[{\"type\":\"input_text\",\"text\":\"" << json_escape(request.messages[i].content)
+              << "\",\"content\":[{\"type\":\"input_text\",\"text\":\"" << json_escape(content)
               << "\"}]}";
     }
     input << ']';

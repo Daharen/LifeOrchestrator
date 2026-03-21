@@ -85,6 +85,31 @@ bool is_high_risk_command(const IntentCommandContext& context, const std::string
     return it != context.commands.end() && it->high_risk;
 }
 
+bool is_known_command(const IntentCommandContext& context, const std::string& command) {
+    return std::any_of(context.commands.begin(), context.commands.end(), [&](const auto& item) { return item.command == command; });
+}
+
+std::string normalize_mode_value(const std::string& value) {
+    const auto lowered = lower_copy(trim_copy(value));
+    if (lowered.empty()) return "failure";
+    if (lowered == "proposed" || lowered == "command" || lowered == "proposal" || lowered == "success") return "proposed";
+    if (lowered == "failure" || lowered == "no_match" || lowered == "error") return "failure";
+    return {};
+}
+
+bool try_parse_bool_like(const std::string& value, bool& parsed) {
+    const auto lowered = lower_copy(trim_copy(value));
+    if (lowered == "true" || lowered == "1" || lowered == "yes") {
+        parsed = true;
+        return true;
+    }
+    if (lowered == "false" || lowered == "0" || lowered == "no" || lowered.empty() || lowered == "null") {
+        parsed = false;
+        return true;
+    }
+    return false;
+}
+
 }  // namespace
 
 IntentCommandContext build_intent_command_context(const std::vector<std::string>& commands,
@@ -155,10 +180,7 @@ IntentRoutingResult route_with_provider(const std::string& input,
     }
     if (const auto it = parsed.find("reasoning_summary"); it != parsed.end()) result.reasoning_summary = it->second;
     if (const auto it = parsed.find("requires_confirmation"); it != parsed.end()) {
-        const auto normalized_bool = lower_copy(trim_copy(it->second));
-        if (normalized_bool == "true" || normalized_bool == "1" || normalized_bool == "yes") result.requires_confirmation = true;
-        else if (normalized_bool == "false" || normalized_bool == "0" || normalized_bool == "no") result.requires_confirmation = false;
-        else {
+        if (!try_parse_bool_like(it->second, result.requires_confirmation)) {
             result.reasoning_summary = "Provider returned malformed confirmation metadata.";
             result.user_facing_message = "The provider returned invalid confirmation metadata.";
             result.matched_command.clear();
@@ -170,6 +192,71 @@ IntentRoutingResult route_with_provider(const std::string& input,
 
     if (result.requires_confirmation || is_high_risk_command(context, result.matched_command)) result.requires_confirmation = true;
     return result;
+}
+
+IntentRouteNormalizationOutcome normalize_intent_routing_result(IntentRoutingResult result,
+                                                                const IntentCommandContext& context,
+                                                                const std::vector<std::string>& fallback_closest_commands) {
+    IntentRouteNormalizationOutcome outcome;
+    outcome.route = std::move(result);
+    auto& route = outcome.route;
+
+    route.mode = trim_copy(route.mode);
+    route.matched_command = trim_copy(route.matched_command);
+    route.reasoning_summary = trim_copy(route.reasoning_summary);
+    route.user_facing_message = trim_copy(route.user_facing_message);
+    route.closest_commands.erase(std::remove_if(route.closest_commands.begin(), route.closest_commands.end(), [](const std::string& value) { return trim_copy(value).empty(); }), route.closest_commands.end());
+    if (route.closest_commands.empty()) route.closest_commands = fallback_closest_commands;
+    if (!std::isfinite(route.confidence)) route.confidence = 0.0;
+    if (route.confidence < 0.0) route.confidence = 0.0;
+    if (route.confidence > 1.0) route.confidence = 1.0;
+
+    const auto canonical_mode = normalize_mode_value(route.mode);
+    if (!canonical_mode.empty()) route.mode = canonical_mode;
+    else {
+        route.mode = "failure";
+        outcome.failure_class = "provider_output_unrecognized";
+        outcome.acceptance_result = "rejected_unrecognized_mode";
+    }
+
+    if (!outcome.failure_class.empty()) {
+        if (route.reasoning_summary.empty()) route.reasoning_summary = "Provider returned an unrecognized routing mode.";
+        if (route.user_facing_message.empty()) route.user_facing_message = "I couldn't safely interpret that provider result. Try Help or an exact command.";
+        route.matched_command.clear();
+        route.args.clear();
+    } else if (route.mode == "proposed") {
+        if (route.matched_command.empty()) {
+            route.mode = "failure";
+            outcome.failure_class = "provider_output_incomplete";
+            outcome.acceptance_result = "rejected_missing_command";
+        } else if (!is_known_command(context, route.matched_command)) {
+            route.mode = "failure";
+            outcome.failure_class = "provider_output_ungrounded_command";
+            outcome.acceptance_result = "rejected_ungrounded_command";
+        } else {
+            if (route.args.empty()) route.args.push_back(route.matched_command);
+            if (route.args.front() != route.matched_command) route.args.insert(route.args.begin(), route.matched_command);
+            if (is_high_risk_command(context, route.matched_command)) route.requires_confirmation = true;
+            outcome.acceptance_result = "accepted_proposed";
+        }
+    } else {
+        route.matched_command.clear();
+        route.args.clear();
+        outcome.failure_class = "provider_output_invalid";
+        outcome.acceptance_result = "accepted_failure";
+    }
+
+    if (route.reasoning_summary.empty()) {
+        route.reasoning_summary = route.mode == "failure" ? "Provider returned a recognized failure route." : "Provider route normalized successfully.";
+    }
+    if (route.user_facing_message.empty()) {
+        route.user_facing_message = route.mode == "failure"
+                                        ? "I couldn't map that request to a supported command. Try Help or an exact command."
+                                        : "Mapped request safely.";
+    }
+    if (outcome.failure_class.empty() && route.mode == "failure") outcome.failure_class = "provider_output_invalid";
+    if (outcome.acceptance_result.empty()) outcome.acceptance_result = route.mode == "proposed" ? "accepted_proposed" : "accepted_failure";
+    return outcome;
 }
 
 std::string serialize_intent_routing_result(const IntentRoutingResult& result) {
