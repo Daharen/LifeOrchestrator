@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <cmath>
 #include <sstream>
 #include <unordered_map>
 
@@ -14,6 +15,25 @@ std::string trim_copy(const std::string& value) {
     std::size_t end = value.size();
     while (end > start && std::isspace(static_cast<unsigned char>(value[end - 1]))) --end;
     return value.substr(start, end - start);
+}
+
+std::string lower_copy(std::string value) {
+    std::transform(value.begin(), value.end(), value.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+    return value;
+}
+
+bool try_parse_double(const std::string& value, double& parsed) {
+    try {
+        std::size_t consumed = 0;
+        parsed = std::stod(value, &consumed);
+        if (consumed != value.size() || !std::isfinite(parsed)) return false;
+        if (parsed < 0.0) parsed = 0.0;
+        if (parsed > 1.0) parsed = 1.0;
+        return true;
+    } catch (...) {
+        parsed = 0.0;
+        return false;
+    }
 }
 
 std::string join_strings(const std::vector<std::string>& values, const std::string& delimiter) {
@@ -127,9 +147,24 @@ IntentRoutingResult route_with_provider(const std::string& input,
     if (const auto it = parsed.find("mode"); it != parsed.end()) result.mode = it->second;
     if (const auto it = parsed.find("matched_command"); it != parsed.end()) result.matched_command = it->second;
     if (const auto it = parsed.find("args"); it != parsed.end()) result.args = split_args(it->second);
-    if (const auto it = parsed.find("confidence"); it != parsed.end()) result.confidence = std::stod(it->second);
+    if (const auto it = parsed.find("confidence"); it != parsed.end() && !try_parse_double(it->second, result.confidence)) {
+        result.reasoning_summary = "Provider returned malformed confidence.";
+        result.user_facing_message = "The provider returned invalid confidence metadata.";
+        result.matched_command.clear();
+        return result;
+    }
     if (const auto it = parsed.find("reasoning_summary"); it != parsed.end()) result.reasoning_summary = it->second;
-    if (const auto it = parsed.find("requires_confirmation"); it != parsed.end()) result.requires_confirmation = parse_bool(it->second);
+    if (const auto it = parsed.find("requires_confirmation"); it != parsed.end()) {
+        const auto normalized_bool = lower_copy(trim_copy(it->second));
+        if (normalized_bool == "true" || normalized_bool == "1" || normalized_bool == "yes") result.requires_confirmation = true;
+        else if (normalized_bool == "false" || normalized_bool == "0" || normalized_bool == "no") result.requires_confirmation = false;
+        else {
+            result.reasoning_summary = "Provider returned malformed confirmation metadata.";
+            result.user_facing_message = "The provider returned invalid confirmation metadata.";
+            result.matched_command.clear();
+            return result;
+        }
+    }
     if (const auto it = parsed.find("closest_commands"); it != parsed.end()) result.closest_commands = split_csv(it->second);
     if (const auto it = parsed.find("user_facing_message"); it != parsed.end()) result.user_facing_message = it->second;
 

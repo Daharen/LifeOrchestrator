@@ -29,7 +29,10 @@ private:
     void Layout();
     void AttachComposerSubclass();
     void RefreshTranscriptText();
+    void SafeRefreshTranscriptText();
     void AppendMessage(const life_orchestrator::app::assistant_shell::AssistantShellMessage& message);
+    std::string RenderMessageBlockLine(const life_orchestrator::app::assistant_shell::AssistantShellMessage& message,
+                                       const life_orchestrator::app::assistant_shell::AssistantShellMessageBlock& block);
     void UpdateStatus(const life_orchestrator::app::assistant_shell::AssistantShellStatusSnapshot& status_snapshot);
     void UpdateToolPanel(const std::vector<life_orchestrator::app::assistant_shell::AssistantShellToolPanelSection>& sections);
     void UpdateConfirmationSurface();

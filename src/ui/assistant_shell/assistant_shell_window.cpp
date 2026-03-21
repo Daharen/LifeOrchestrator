@@ -16,6 +16,7 @@
 #include <algorithm>
 #include <cstdlib>
 #include <filesystem>
+#include <iostream>
 #include <sstream>
 #include <string>
 #include <vector>
@@ -70,6 +71,20 @@ void append_menu_item(HMENU menu, UINT id, const wchar_t* title) {
 
 HMENU control_menu_id(int id) {
     return reinterpret_cast<HMENU>(static_cast<INT_PTR>(id));
+}
+
+std::string sanitize_transcript_value(std::string value, std::size_t max_length = 320) {
+    value.erase(std::remove(value.begin(), value.end(), '\r'), value.end());
+    std::replace(value.begin(), value.end(), '\n', ' ');
+    if (value.empty()) value = "(empty)";
+    if (value.size() > max_length) value = value.substr(0, max_length) + "...";
+    return value;
+}
+
+void emit_window_diagnostic(const std::string& marker, const std::string& detail = {}) {
+    std::clog << marker;
+    if (!detail.empty()) std::clog << " detail=" << sanitize_transcript_value(detail, 160);
+    std::clog << '\n';
 }
 }
 
@@ -235,31 +250,43 @@ void AssistantShellWindow::Layout() {
     InvalidateRect(hwnd_, nullptr, TRUE);
 }
 
-void AssistantShellWindow::AppendMessage(const app::assistant_shell::AssistantShellMessage& message) {
-    for (const auto& block : message.blocks) {
-        std::ostringstream line;
-        if (block.type == app::assistant_shell::AssistantShellMessageBlockType::UserText) line << "You: ";
-        else if (message.role == "assistant") line << "Assistant: ";
-        else line << "System: ";
-        line << block.text;
-        if (block.execution_summary.has_value()) {
-            line << "\r\n  Route: " << block.execution_summary->selected_route
-                 << " | Path: " << block.execution_summary->resolution_path
-                 << " | Confidence: " << block.execution_summary->confidence
-                 << " | Provider: " << (block.execution_summary->provider_used ? "yes" : "no");
-            if (!block.execution_summary->explanation.empty()) line << "\r\n  Why: " << block.execution_summary->explanation;
-        }
-        if (block.artifact_card.has_value()) {
-            line << "\r\n  " << block.artifact_card->title;
-            for (const auto& [label, value] : block.artifact_card->summary_fields) line << "\r\n    " << label << ": " << value;
-        }
-        if (block.confirmation_request.has_value()) {
-            line << "\r\n  Confirmation: " << block.confirmation_request->prompt;
-            pending_confirmation_ = block.confirmation_request;
-        }
-        transcript_lines_.push_back(line.str());
+std::string AssistantShellWindow::RenderMessageBlockLine(const app::assistant_shell::AssistantShellMessage& message,
+                                                         const app::assistant_shell::AssistantShellMessageBlock& block) {
+    std::ostringstream line;
+    if (block.type == app::assistant_shell::AssistantShellMessageBlockType::UserText) line << "You: ";
+    else if (message.role == "assistant") line << "Assistant: ";
+    else line << "System: ";
+    line << sanitize_transcript_value(block.text);
+    if (block.execution_summary.has_value()) {
+        const auto& summary = *block.execution_summary;
+        line << "\r\n  Route: " << sanitize_transcript_value(summary.selected_route, 120)
+             << " | Path: " << sanitize_transcript_value(summary.resolution_path, 120)
+             << " | Confidence: " << summary.confidence
+             << " | Provider: " << (summary.provider_used ? "yes" : "no");
+        if (!summary.explanation.empty()) line << "\r\n  Why: " << sanitize_transcript_value(summary.explanation);
     }
-    RefreshTranscriptText();
+    if (block.artifact_card.has_value()) {
+        line << "\r\n  " << sanitize_transcript_value(block.artifact_card->title, 120);
+        for (const auto& [label, value] : block.artifact_card->summary_fields) line << "\r\n    " << sanitize_transcript_value(label, 80) << ": " << sanitize_transcript_value(value, 160);
+    }
+    if (block.confirmation_request.has_value()) {
+        line << "\r\n  Confirmation: " << sanitize_transcript_value(block.confirmation_request->prompt, 160);
+        pending_confirmation_ = block.confirmation_request;
+    }
+    return line.str();
+}
+
+void AssistantShellWindow::AppendMessage(const app::assistant_shell::AssistantShellMessage& message) {
+    try {
+        for (const auto& block : message.blocks) transcript_lines_.push_back(RenderMessageBlockLine(message, block));
+    } catch (const std::exception& ex) {
+        emit_window_diagnostic("assistant_shell_submit_failed", ex.what());
+        transcript_lines_.push_back("System: Assistant shell rendering fallback activated.");
+    } catch (...) {
+        emit_window_diagnostic("assistant_shell_submit_failed", "unknown_render_exception");
+        transcript_lines_.push_back("System: Assistant shell rendering fallback activated.");
+    }
+    SafeRefreshTranscriptText();
 }
 
 void AssistantShellWindow::AttachComposerSubclass() {
@@ -272,9 +299,23 @@ void AssistantShellWindow::RefreshTranscriptText() {
     std::ostringstream combined;
     for (std::size_t index = 0; index < transcript_lines_.size(); ++index) {
         if (index > 0) combined << "\r\n\r\n";
-        combined << transcript_lines_[index];
+        combined << sanitize_transcript_value(transcript_lines_[index], 2000);
     }
     transcript_.SetText(combined.str());
+}
+
+void AssistantShellWindow::SafeRefreshTranscriptText() {
+    emit_window_diagnostic("assistant_shell_render_begin");
+    try {
+        RefreshTranscriptText();
+        emit_window_diagnostic("assistant_shell_render_complete");
+    } catch (const std::exception& ex) {
+        emit_window_diagnostic("assistant_shell_submit_failed", ex.what());
+        transcript_.SetText("System: Assistant shell transcript refresh failed; fallback rendering applied.");
+    } catch (...) {
+        emit_window_diagnostic("assistant_shell_submit_failed", "unknown_refresh_exception");
+        transcript_.SetText("System: Assistant shell transcript refresh failed; fallback rendering applied.");
+    }
 }
 
 LRESULT CALLBACK AssistantShellWindow::ComposerEditProc(HWND hwnd, UINT message, WPARAM w_param, LPARAM l_param) {
@@ -314,13 +355,23 @@ void AssistantShellWindow::UpdateConfirmationSurface() {
 void AssistantShellWindow::SubmitComposer() {
     const auto text = get_window_text_utf8(composer_edit_);
     if (!AssistantShellComposerInput::CanSubmit(text) || text == composer_placeholder_) return;
-    const auto result = controller_->SubmitUserText({session_id_, text});
-    transcript_lines_.push_back("You: " + text);
-    for (const auto& message : result.appended_messages) AppendMessage(message);
-    pending_confirmation_ = result.pending_confirmation;
-    UpdateStatus(result.status);
-    UpdateToolPanel(result.tool_panel_sections);
-    UpdateConfirmationSurface();
+    try {
+        const auto result = controller_->SubmitUserText({session_id_, text});
+        transcript_lines_.push_back("You: " + sanitize_transcript_value(text, 320));
+        for (const auto& message : result.appended_messages) AppendMessage(message);
+        pending_confirmation_ = result.pending_confirmation;
+        UpdateStatus(result.status);
+        UpdateToolPanel(result.tool_panel_sections);
+        UpdateConfirmationSurface();
+    } catch (const std::exception& ex) {
+        emit_window_diagnostic("assistant_shell_submit_failed", ex.what());
+        transcript_lines_.push_back("System: Assistant shell submission failed.");
+        SafeRefreshTranscriptText();
+    } catch (...) {
+        emit_window_diagnostic("assistant_shell_submit_failed", "unknown_submit_exception");
+        transcript_lines_.push_back("System: Assistant shell submission failed.");
+        SafeRefreshTranscriptText();
+    }
     SetWindowTextW(composer_edit_, L"");
     SetFocus(composer_edit_);
 }
@@ -328,8 +379,8 @@ void AssistantShellWindow::SubmitComposer() {
 void AssistantShellWindow::ResolveConfirmation(bool accepted) {
     if (!pending_confirmation_.has_value()) return;
     const auto confirmation = controller_->ResolveConfirmation(session_id_, pending_confirmation_->confirmation_id, accepted);
-    transcript_lines_.push_back(std::string{"Assistant: "} + confirmation.assistant_message);
-    RefreshTranscriptText();
+    transcript_lines_.push_back(std::string{"Assistant: "} + sanitize_transcript_value(confirmation.assistant_message, 320));
+    SafeRefreshTranscriptText();
     pending_confirmation_.reset();
     UpdateConfirmationSurface();
     if (const auto status = controller_->LoadLastStatus(session_id_); status.has_value()) UpdateStatus(*status);
