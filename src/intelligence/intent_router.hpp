@@ -45,6 +45,7 @@ struct IntentRouteNormalizationOutcome {
     IntentRoutingResult route;
     std::string failure_class;
     std::string acceptance_result;
+    std::string rejection_reason;
 };
 
 using IntentProvider = std::function<std::string(const std::string& prompt)>;

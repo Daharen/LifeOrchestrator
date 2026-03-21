@@ -141,6 +141,7 @@ std::string render_intent_prompt(const std::string& input,
     std::ostringstream prompt;
     prompt << "Return structured output only as newline-delimited key=value pairs.\n";
     prompt << "Allowed keys: mode,matched_command,args,confidence,reasoning_summary,requires_confirmation,closest_commands,user_facing_message.\n";
+    prompt << "For mode=proposed, matched_command must be a canonical command id from the catalog and args must be a canonical CLI-style command string or token list.\n";
     prompt << "Input=" << input << "\n";
     for (const auto& command : context.commands) {
         prompt << "command=" << command.command;
@@ -194,6 +195,36 @@ IntentRoutingResult route_with_provider(const std::string& input,
     return result;
 }
 
+namespace {
+std::string join_args(const std::vector<std::string>& args) {
+    return join_strings(args, " ");
+}
+
+std::string normalize_command_alias_value(const std::string& value) {
+    const auto trimmed = trim_copy(value);
+    if (trimmed == "create_activity") return "procedural-upsert-activity";
+    if (trimmed == "list_activities") return "procedural-list-activities";
+    if (trimmed == "list_backlog") return "behavioral-list-backlog";
+    if (trimmed == "list_interventions") return "behavioral-list-interventions";
+    if (trimmed == "show_priorities") return "artifact.query";
+    return trimmed;
+}
+
+bool command_supports_default_args(const std::string& command) {
+    return command == "help" || command == "status" || command == "suggest" || command == "procedural-list-activities" ||
+           command == "behavioral-list-backlog" || command == "behavioral-list-interventions";
+}
+
+bool has_required_flags(const IntentCommandContext& context, const std::string& command, const std::vector<std::string>& args) {
+    const auto it = std::find_if(context.commands.begin(), context.commands.end(), [&](const auto& descriptor) { return descriptor.command == command; });
+    if (it == context.commands.end()) return false;
+    for (const auto& flag : it->required_flags) {
+        if (std::find(args.begin(), args.end(), flag) == args.end()) return false;
+    }
+    return true;
+}
+}
+
 IntentRouteNormalizationOutcome normalize_intent_routing_result(IntentRoutingResult result,
                                                                 const IntentCommandContext& context,
                                                                 const std::vector<std::string>& fallback_closest_commands) {
@@ -202,7 +233,7 @@ IntentRouteNormalizationOutcome normalize_intent_routing_result(IntentRoutingRes
     auto& route = outcome.route;
 
     route.mode = trim_copy(route.mode);
-    route.matched_command = trim_copy(route.matched_command);
+    route.matched_command = normalize_command_alias_value(route.matched_command);
     route.reasoning_summary = trim_copy(route.reasoning_summary);
     route.user_facing_message = trim_copy(route.user_facing_message);
     route.closest_commands.erase(std::remove_if(route.closest_commands.begin(), route.closest_commands.end(), [](const std::string& value) { return trim_copy(value).empty(); }), route.closest_commands.end());
@@ -215,8 +246,9 @@ IntentRouteNormalizationOutcome normalize_intent_routing_result(IntentRoutingRes
     if (!canonical_mode.empty()) route.mode = canonical_mode;
     else {
         route.mode = "failure";
-        outcome.failure_class = "provider_output_unrecognized";
-        outcome.acceptance_result = "rejected_unrecognized_mode";
+        outcome.failure_class = "provider_output_invalid_mode";
+        outcome.acceptance_result = "rejected_invalid_mode";
+        outcome.rejection_reason = "invalid_mode";
     }
 
     if (!outcome.failure_class.empty()) {
@@ -229,21 +261,38 @@ IntentRouteNormalizationOutcome normalize_intent_routing_result(IntentRoutingRes
             route.mode = "failure";
             outcome.failure_class = "provider_output_incomplete";
             outcome.acceptance_result = "rejected_missing_command";
+            outcome.rejection_reason = "missing_matched_command";
         } else if (!is_known_command(context, route.matched_command)) {
             route.mode = "failure";
             outcome.failure_class = "provider_output_ungrounded_command";
             outcome.acceptance_result = "rejected_ungrounded_command";
+            outcome.rejection_reason = "unknown_command";
         } else {
-            if (route.args.empty()) route.args.push_back(route.matched_command);
-            if (route.args.front() != route.matched_command) route.args.insert(route.args.begin(), route.matched_command);
-            if (is_high_risk_command(context, route.matched_command)) route.requires_confirmation = true;
-            outcome.acceptance_result = "accepted_proposed";
+            if (route.args.empty() && command_supports_default_args(route.matched_command)) route.args.push_back(route.matched_command);
+            if (!route.args.empty() && route.args.front() != route.matched_command) route.args.insert(route.args.begin(), route.matched_command);
+            if (route.args.empty()) {
+                route.mode = "failure";
+                outcome.failure_class = "provider_output_missing_required_args";
+                outcome.acceptance_result = "rejected_missing_required_args";
+                outcome.rejection_reason = "invalid_args";
+            } else if (!has_required_flags(context, route.matched_command, route.args) &&
+                       !(route.requires_confirmation || is_high_risk_command(context, route.matched_command))) {
+                route.mode = "failure";
+                route.args.clear();
+                outcome.failure_class = "provider_output_missing_required_args";
+                outcome.acceptance_result = "rejected_missing_required_args";
+                outcome.rejection_reason = "invalid_args";
+            } else {
+                if (is_high_risk_command(context, route.matched_command)) route.requires_confirmation = true;
+                outcome.acceptance_result = "accepted_proposed";
+            }
         }
     } else {
         route.matched_command.clear();
         route.args.clear();
-        outcome.failure_class = "provider_output_invalid";
+        outcome.failure_class = route.user_facing_message.empty() ? "provider_output_invalid" : "provider_output_helpful_failure";
         outcome.acceptance_result = "accepted_failure";
+        outcome.rejection_reason = route.user_facing_message.empty() ? "empty_failure_message" : std::string{};
     }
 
     if (route.reasoning_summary.empty()) {
@@ -254,7 +303,7 @@ IntentRouteNormalizationOutcome normalize_intent_routing_result(IntentRoutingRes
                                         ? "I couldn't map that request to a supported command. Try Help or an exact command."
                                         : "Mapped request safely.";
     }
-    if (outcome.failure_class.empty() && route.mode == "failure") outcome.failure_class = "provider_output_invalid";
+    if (outcome.failure_class.empty() && route.mode == "failure") outcome.failure_class = "provider_output_helpful_failure";
     if (outcome.acceptance_result.empty()) outcome.acceptance_result = route.mode == "proposed" ? "accepted_proposed" : "accepted_failure";
     return outcome;
 }

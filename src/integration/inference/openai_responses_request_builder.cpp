@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <cctype>
 #include <sstream>
+#include <vector>
 
 namespace life_orchestrator::integration::inference {
 namespace {
@@ -13,15 +14,52 @@ std::string lower_copy(std::string value) {
     return value;
 }
 
+struct CommandCatalogEntry {
+    std::string command_id;
+    std::string purpose;
+    std::string argument_pattern;
+    std::string use_when;
+    std::string avoid_when;
+};
+
+std::vector<CommandCatalogEntry> command_catalog() {
+    return {
+        {"help", "Show the supported command surface and exact usage guidance.", "help", "Use for broad capability or command-discovery requests.", "Avoid when the user clearly wants a concrete state lookup or mutation."},
+        {"suggest", "Suggest likely exact commands to try next.", "suggest <partial-command>", "Use when the user is exploratory but still asking for command discovery.", "Avoid when a concrete supported command already fits cleanly."},
+        {"status", "Show the current system and memory status summary.", "status", "Use for high-level current-state questions about the system.", "Avoid when the user is asking to create, update, or list a specific domain artifact."},
+        {"procedural-upsert-activity", "Create or update an activity inventory item such as a recurring household task.", "procedural-upsert-activity --activity-id <id> --title <Title> --domain-source <domain> --frequency <cadence> --duration-minutes <minutes> --effort-estimate <1-10> --outcome-value <1-10>", "Use for create/update task requests when you can ground the required fields safely.", "Avoid when the request is too vague to fill required fields or when the user only wants to list tasks."},
+        {"procedural-list-activities", "List activity inventory items.", "procedural-list-activities", "Use when the user wants to review current tasks or activities.", "Avoid when the user wants to create or update an activity."},
+        {"behavioral-list-backlog", "List the current behavioral backlog or priorities.", "behavioral-list-backlog", "Use for requests about priorities, backlog, or what needs attention now.", "Avoid when the user wants capabilities help instead of their actual backlog."},
+        {"behavioral-list-interventions", "List current behavioral interventions.", "behavioral-list-interventions", "Use for requests about interventions, supports, or active behavior-change guidance.", "Avoid when the user is asking for backlog or activity inventory instead."},
+        {"artifact.query", "Query user-facing artifacts such as activity inventory or behavioral backlog summaries.", "artifact.query --artifact-type <activity_inventory|behavioral_backlog|behavioral_interventions|provider_config_summary>", "Use when the user explicitly wants artifact-style summaries or records.", "Avoid when a simpler list/help command is a better fit."}
+    };
+}
+
 std::string schema_json() {
-    return R"({"type":"object","additionalProperties":false,"required":["mode","matched_command","args","confidence","reasoning_summary","requires_confirmation","closest_commands","user_facing_message"],"properties":{"mode":{"type":"string"},"matched_command":{"type":"string"},"args":{"type":"string"},"confidence":{"type":"number"},"reasoning_summary":{"type":"string"},"requires_confirmation":{"type":"boolean"},"closest_commands":{"type":"string"},"user_facing_message":{"type":"string"}}})";
+    return R"({"type":"object","additionalProperties":false,"required":["mode","matched_command","args","confidence","reasoning_summary","requires_confirmation","closest_commands","user_facing_message"],"properties":{"mode":{"type":"string"},"matched_command":{"type":"string"},"args":{"oneOf":[{"type":"string"},{"type":"array","items":{"type":"string"}}]},"confidence":{"type":"number"},"reasoning_summary":{"type":"string"},"requires_confirmation":{"type":"boolean"},"closest_commands":{"oneOf":[{"type":"string"},{"type":"array","items":{"type":"string"}}]},"user_facing_message":{"type":"string"}}})";
 }
 
 std::string grounding_instruction() {
-    return "You are the intent router. Return only the canonical routing JSON object with fields mode, matched_command, args, confidence, reasoning_summary, requires_confirmation, closest_commands, user_facing_message. "
-           "Allowed mode values: proposed or failure. matched_command must be either empty or one of the command names supplied in the prompt. "
-           "Do not invent commands. For a household task such as Create laundry task, map to procedural-upsert-activity when grounded. "
-           "For vague unsupported requests such as What can you do?, return mode failure with a helpful user_facing_message that nudges toward Help or exact commands.";
+    std::ostringstream out;
+    out << "You are the intent router. Return only the canonical routing JSON object with fields mode, matched_command, args, confidence, reasoning_summary, requires_confirmation, closest_commands, user_facing_message. ";
+    out << "Choose only from the command catalog below. Do not invent commands. If nothing fits, return mode failure with matched_command empty, args empty, and a helpful grounded user_facing_message. ";
+    out << "If the request is vague, exploratory, or about broad capabilities, prefer a grounded help-oriented failure or the help command rather than hallucinating an action route. ";
+    out << "For mode=proposed, matched_command must be one of the catalog command ids and args must be a canonical CLI-style command string or an array of CLI tokens. closest_commands may be a comma string or array limited to catalog commands.\n";
+    out << "Authoritative command catalog:\n";
+    for (const auto& entry : command_catalog()) {
+        out << "- command_id=" << entry.command_id
+            << ";purpose=" << entry.purpose
+            << ";args=" << entry.argument_pattern
+            << ";use_when=" << entry.use_when
+            << ";avoid_when=" << entry.avoid_when << "\n";
+    }
+    out << "Few-shot examples (canonical outputs only):\n";
+    out << "User: Create laundry task\nAssistant: {\"mode\":\"proposed\",\"matched_command\":\"procedural-upsert-activity\",\"args\":\"procedural-upsert-activity --activity-id activity.laundry --title Laundry --domain-source home --frequency weekly --duration-minutes 60 --effort-estimate 4 --outcome-value 6\",\"confidence\":0.90,\"reasoning_summary\":\"Laundry task creation maps to the existing activity upsert flow with safe defaults.\",\"requires_confirmation\":false,\"closest_commands\":\"procedural-upsert-activity,procedural-list-activities\",\"user_facing_message\":\"I mapped that to a grounded laundry activity proposal.\"}\n";
+    out << "User: Create a weekly laundry task\nAssistant: {\"mode\":\"proposed\",\"matched_command\":\"procedural-upsert-activity\",\"args\":\"procedural-upsert-activity --activity-id activity.weekly-laundry --title WeeklyLaundry --domain-source home --frequency weekly --duration-minutes 60 --effort-estimate 4 --outcome-value 6\",\"confidence\":0.92,\"reasoning_summary\":\"Weekly laundry can be grounded with deterministic weekly defaults.\",\"requires_confirmation\":false,\"closest_commands\":\"procedural-upsert-activity,procedural-list-activities\",\"user_facing_message\":\"I mapped your request to a weekly laundry activity proposal.\"}\n";
+    out << "User: Create a new task for washing sheets and blankets subcategorized under laundry, weekly\nAssistant: {\"mode\":\"proposed\",\"matched_command\":\"procedural-upsert-activity\",\"args\":\"procedural-upsert-activity --activity-id activity.sheets-and-blankets --title SheetsAndBlanketsLaundry --domain-source home.laundry --frequency weekly --duration-minutes 90 --effort-estimate 5 --outcome-value 7\",\"confidence\":0.89,\"reasoning_summary\":\"The request specifies a recurring household task with enough detail to ground the required activity fields.\",\"requires_confirmation\":false,\"closest_commands\":\"procedural-upsert-activity,procedural-list-activities\",\"user_facing_message\":\"I mapped that to a grounded weekly sheets-and-blankets laundry activity proposal.\"}\n";
+    out << "User: What can you do?\nAssistant: {\"mode\":\"failure\",\"matched_command\":\"\",\"args\":\"\",\"confidence\":0.42,\"reasoning_summary\":\"This is a broad capability question, so a help-oriented response is safer than inventing an action route.\",\"requires_confirmation\":false,\"closest_commands\":\"help,suggest,status\",\"user_facing_message\":\"Try Help to see supported commands, or ask for a specific status, list, or activity action.\"}\n";
+    out << "User: Show my current priorities\nAssistant: {\"mode\":\"proposed\",\"matched_command\":\"behavioral-list-backlog\",\"args\":\"behavioral-list-backlog\",\"confidence\":0.87,\"reasoning_summary\":\"Current priorities map most directly to the behavioral backlog listing.\",\"requires_confirmation\":false,\"closest_commands\":\"behavioral-list-backlog,behavioral-list-interventions,status\",\"user_facing_message\":\"I mapped that to your current backlog priorities.\"}\n";
+    return out.str();
 }
 }  // namespace
 

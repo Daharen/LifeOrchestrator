@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <sstream>
+#include <vector>
 
 namespace life_orchestrator::integration::inference {
 namespace {
@@ -21,6 +22,14 @@ std::string scalar_field(const std::string& json, const std::string& key, const 
 std::string lower_copy(std::string value) {
     std::transform(value.begin(), value.end(), value.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
     return value;
+}
+
+std::string trim_copy(const std::string& value) {
+    std::size_t start = 0;
+    while (start < value.size() && std::isspace(static_cast<unsigned char>(value[start]))) ++start;
+    std::size_t end = value.size();
+    while (end > start && std::isspace(static_cast<unsigned char>(value[end - 1]))) --end;
+    return value.substr(start, end - start);
 }
 
 std::string normalize_mode(const std::string& value) {
@@ -51,23 +60,70 @@ std::string normalize_confidence(const std::string& value) {
     }
 }
 
+std::string normalize_command_alias(const std::string& value) {
+    const auto trimmed = trim_copy(value);
+    if (trimmed == "create_activity") return "procedural-upsert-activity";
+    if (trimmed == "create-activity") return "procedural-upsert-activity";
+    if (trimmed == "list_activities") return "procedural-list-activities";
+    if (trimmed == "list_backlog") return "behavioral-list-backlog";
+    if (trimmed == "list_interventions") return "behavioral-list-interventions";
+    if (trimmed == "show_priorities") return "behavioral-list-backlog";
+    return trimmed;
+}
+
+std::vector<std::string> parse_string_array(const std::string& raw) {
+    std::vector<std::string> values;
+    if (raw.size() < 2 || raw.front() != '[' || raw.back() != ']') return values;
+    std::size_t cursor = 0;
+    while ((cursor = raw.find('"', cursor)) != std::string::npos) {
+        const auto end = raw.find('"', cursor + 1);
+        if (end == std::string::npos) break;
+        values.push_back(raw.substr(cursor + 1, end - cursor - 1));
+        cursor = end + 1;
+    }
+    return values;
+}
+
+std::string normalize_command_like_field(const std::string& structured_json, const std::string& key) {
+    if (const auto string_value = json_extract_string_field(structured_json, key); string_value.has_value()) return normalize_command_alias(*string_value);
+    if (const auto raw_value = json_extract_raw_field(structured_json, key); raw_value.has_value()) return normalize_command_alias(trim_quotes(*raw_value));
+    return {};
+}
+
+std::string normalize_args(const std::string& structured_json, const std::string& matched_command) {
+    if (const auto string_value = json_extract_string_field(structured_json, "args"); string_value.has_value()) return trim_copy(*string_value);
+    if (const auto raw_value = json_extract_raw_field(structured_json, "args"); raw_value.has_value()) {
+        const auto raw = trim_copy(*raw_value);
+        if (raw == "null") return {};
+        if (!raw.empty() && raw.front() == '[' && raw.back() == ']') {
+            auto parts = parse_string_array(raw);
+            if (!parts.empty()) {
+                if (!matched_command.empty()) parts.front() = normalize_command_alias(parts.front());
+                std::ostringstream out;
+                for (std::size_t i = 0; i < parts.size(); ++i) {
+                    if (i > 0) out << ' ';
+                    out << parts[i];
+                }
+                return out.str();
+            }
+            return {};
+        }
+        return trim_quotes(raw);
+    }
+    return {};
+}
+
 std::string normalize_closest_commands(const std::string& structured_json) {
     if (const auto string_value = json_extract_string_field(structured_json, "closest_commands"); string_value.has_value()) return *string_value;
     if (const auto raw_value = json_extract_raw_field(structured_json, "closest_commands"); raw_value.has_value()) {
         auto raw = *raw_value;
-        if (raw == "null") return {};
-        if (raw == "[]") return {};
+        if (raw == "null" || raw == "[]") return {};
         if (!raw.empty() && raw.front() == '[' && raw.back() == ']') {
+            const auto parts = parse_string_array(raw);
             std::ostringstream out;
-            std::size_t cursor = 0;
-            bool first = true;
-            while ((cursor = raw.find('"', cursor)) != std::string::npos) {
-                const auto end = raw.find('"', cursor + 1);
-                if (end == std::string::npos) break;
-                if (!first) out << ',';
-                out << raw.substr(cursor + 1, end - cursor - 1);
-                first = false;
-                cursor = end + 1;
+            for (std::size_t i = 0; i < parts.size(); ++i) {
+                if (i > 0) out << ',';
+                out << normalize_command_alias(parts[i]);
             }
             return out.str();
         }
@@ -139,8 +195,8 @@ std::optional<std::string> parse_openai_structured_output_to_key_value(const std
     }
 
     const auto mode = normalize_mode(scalar_field(structured_json, "mode"));
-    const auto matched_command = scalar_field(structured_json, "matched_command");
-    const auto args = scalar_field(structured_json, "args");
+    const auto matched_command = normalize_command_like_field(structured_json, "matched_command");
+    const auto args = normalize_args(structured_json, matched_command);
     const auto confidence = normalize_confidence(scalar_field(structured_json, "confidence", "0"));
     const auto reasoning_summary = scalar_field(structured_json, "reasoning_summary");
     const auto requires_confirmation = normalize_bool_like(scalar_field(structured_json, "requires_confirmation", "false"));

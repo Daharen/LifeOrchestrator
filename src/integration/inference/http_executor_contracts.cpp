@@ -26,6 +26,11 @@ std::string trim_copy(const std::string& value) {
     return value.substr(start, end - start);
 }
 
+std::string lower_copy(std::string value) {
+    std::transform(value.begin(), value.end(), value.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+    return value;
+}
+
 std::string safe_preview(const std::string& value) {
     return sanitize_diagnostic_text(value, 256);
 }
@@ -38,15 +43,22 @@ public:
         const auto auth = auth_it == request.headers.end() ? std::string{} : auth_it->second;
         if (auth.find("TEST_") != std::string::npos) {
             std::string payload;
-            if (request.body.find("weekly laundry") != std::string::npos) {
+            const auto lowered_body = lower_copy(request.body);
+            const auto user_request = lowered_body.rfind("user request:");
+            const auto prompt_tail = user_request == std::string::npos ? lowered_body : lowered_body.substr(user_request);
+            if (prompt_tail.find("sheets and blankets") != std::string::npos) {
+                payload = R"({"mode":"proposed","matched_command":"procedural-upsert-activity","args":"procedural-upsert-activity --activity-id activity.sheets-and-blankets --title SheetsAndBlanketsLaundry --domain-source home.laundry --frequency weekly --duration-minutes 90 --effort-estimate 5 --outcome-value 7","confidence":0.89,"reasoning_summary":"Sheets and blankets laundry maps to the existing activity upsert flow with grounded weekly defaults.","requires_confirmation":false,"closest_commands":"procedural-upsert-activity,procedural-list-activities","user_facing_message":"I mapped that to a grounded weekly sheets-and-blankets laundry activity proposal."})";
+            } else if (prompt_tail.find("create laundry task") != std::string::npos || prompt_tail.find("weekly laundry") != std::string::npos) {
                 payload = R"({"mode":"proposed","matched_command":"procedural-upsert-activity","args":"procedural-upsert-activity --activity-id activity.weekly-laundry --title WeeklyLaundry --domain-source home --frequency weekly --duration-minutes 60 --effort-estimate 4 --outcome-value 6","confidence":0.92,"reasoning_summary":"Weekly laundry maps to the existing activity upsert flow with required activity fields filled from safe defaults.","requires_confirmation":false,"closest_commands":"procedural-upsert-activity,status","user_facing_message":"I mapped your request to procedural-upsert-activity and filled the required weekly laundry defaults."})";
-            } else if (request.body.find("provider api key") != std::string::npos) {
+            } else if (prompt_tail.find("what can you do") != std::string::npos) {
+                payload = R"({"mode":"failure","matched_command":"","args":"","confidence":0.42,"reasoning_summary":"Broad capability questions should degrade to grounded help-oriented guidance.","requires_confirmation":false,"closest_commands":"help,suggest,status","user_facing_message":"Try Help to see supported commands, or ask for a specific status, list, or activity action."})";
+            } else if (prompt_tail.find("provider api key") != std::string::npos) {
                 payload = R"({"mode":"proposed","matched_command":"integration-set-provider","args":"integration-set-provider --provider-name openai --api-key TEST_KEY_123 --model-name gpt-5","confidence":0.82,"reasoning_summary":"This request changes provider configuration, which is a high-risk action that must be confirmed.","requires_confirmation":true,"closest_commands":"integration-set-provider,integration-test-provider,integration-list-providers","user_facing_message":"I found a likely provider configuration update, but it requires confirmation before execution."})";
             } else {
                 payload = R"({"mode":"failure","matched_command":"","args":"","confidence":0.21,"reasoning_summary":"No safe structured command mapping was found from the available command list.","requires_confirmation":false,"closest_commands":"status,help,suggest","user_facing_message":"I couldn't find a confident command match. Try one of the closest valid commands instead."})";
             }
-            const auto body = std::string{"{\"output_text\":\""} + json_escape(payload) + "\",\"input_tokens\":12,\"output_tokens\":8,\"total_tokens\":20}";
-            return {200, {}, body, {}, true, true, {}, std::nullopt, {}, "application/json", {}, {}, {}};
+            const auto response_body = std::string{"{\"output_text\":\""} + json_escape(payload) + "\",\"input_tokens\":12,\"output_tokens\":8,\"total_tokens\":20}";
+            return {200, {}, response_body, {}, true, true, {}, std::nullopt, {}, "application/json", {}, {}, {}};
         }
         return {std::nullopt, {}, {}, "http executor is only implemented for Windows in this sprint", false, false, "open_session", std::nullopt, {}, {}, {}, "http executor unavailable on this platform", {}};
     }

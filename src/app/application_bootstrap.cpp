@@ -120,6 +120,15 @@ std::string value_after_equals(const std::string& arg) {
     return pos == std::string::npos ? std::string{} : arg.substr(pos + 1);
 }
 
+std::string join_values(const std::vector<std::string>& values, const std::string& separator) {
+    std::ostringstream out;
+    for (std::size_t i = 0; i < values.size(); ++i) {
+        if (i > 0) out << separator;
+        out << values[i];
+    }
+    return out.str();
+}
+
 struct CommandHelpSpec {
     std::string canonical_name;
     std::vector<std::string> aliases;
@@ -892,14 +901,19 @@ ApplicationExitCode execute_command(ApplicationRuntime& runtime,
         routed_output << "intent_model_output=" << normalized_route.raw_model_output << '\n';
         routed_output << "normalized_mode=" << sanitize_operator_value(normalized_route.mode, 32) << '\n';
         routed_output << "normalized_matched_command=" << sanitize_operator_value(normalized_route.matched_command, 160) << '\n';
-        routed_output << "normalized_requires_confirmation=" << (normalized_route.requires_confirmation ? "true" : "false") << '\n';
+        routed_output << "normalized_args=" << sanitize_operator_value(join_values(normalized_route.args, " "), 320) << '\n';
         routed_output << "normalized_confidence=" << normalized_route.confidence << '\n';
+        routed_output << "normalized_requires_confirmation=" << (normalized_route.requires_confirmation ? "true" : "false") << '\n';
+        routed_output << "normalized_closest_commands=" << sanitize_operator_value(join_values(normalized_route.closest_commands, ","), 240) << '\n';
+        routed_output << "normalized_user_facing_message=" << sanitize_operator_value(normalized_route.user_facing_message, 320) << '\n';
         routed_output << "route_acceptance_result=" << sanitize_operator_value(normalization.acceptance_result, 96) << '\n';
+        routed_output << "route_rejection_reason=" << sanitize_operator_value(normalization.rejection_reason, 96) << '\n';
         routed_output << serialize_intent_routing_result(normalized_route);
         routed_output << "intent_route_command=" << sanitize_operator_value(normalized_route.matched_command, 160) << '\n';
 
         if (normalized_route.mode == "failure" || normalized_route.matched_command.empty()) {
             routed_output << "operator_query_failure_class=" << sanitize_operator_value(normalization.failure_class, 96) << '\n';
+            if (!normalization.rejection_reason.empty()) routed_output << "operator_query_rejection_reason=" << sanitize_operator_value(normalization.rejection_reason, 96) << '\n';
             routed_error << "operator_query=failed\nmessage=" << normalized_route.user_facing_message << '\n';
             return ApplicationExitCode::CommandValidationFailure;
         }
