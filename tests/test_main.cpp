@@ -1286,7 +1286,9 @@ void test_operator_query_provider_and_status_visibility() {
     assert_true(activity_out.str().find("activity_id=activity.weekly-laundry") != std::string::npos, "resolved activity command should execute deterministically");
     assert_true(activity_out.str().find("operator_input_raw=create a weekly laundry task") != std::string::npos, "raw operator input should be logged");
     assert_true(activity_out.str().find("intent_model_output=mode=proposed") != std::string::npos, "structured model output should be logged");
+    assert_true(activity_out.str().find("raw_mode=proposed") != std::string::npos, "raw mode diagnostics should be emitted");
     assert_true(activity_out.str().find("normalized_mode=proposed") != std::string::npos, "normalized mode diagnostics should be emitted");
+    assert_true(activity_out.str().find("raw_matched_command=procedural-upsert-activity") != std::string::npos, "raw matched command diagnostics should be emitted");
     assert_true(activity_out.str().find("normalized_matched_command=procedural-upsert-activity") != std::string::npos, "normalized matched command diagnostics should be emitted");
     assert_true(activity_out.str().find("normalized_args=procedural-upsert-activity --activity-id activity.weekly-laundry") != std::string::npos, "normalized args diagnostics should be emitted");
     assert_true(activity_out.str().find("route_acceptance_result=accepted_proposed") != std::string::npos, "route acceptance diagnostics should be emitted");
@@ -1373,7 +1375,17 @@ void test_live_provider_route_hardening_matrix() {
     const auto normalized_mode_variant = normalize_intent_routing_result(route_with_provider("laundry", context, closest, [](const std::string&) {
         return std::string{"mode=command\nmatched_command=procedural-upsert-activity\nargs=procedural-upsert-activity --activity-id activity.laundry --title Laundry --domain-source home --frequency weekly --duration-minutes 60 --effort-estimate 4 --outcome-value 6\nconfidence=0.71\nreasoning_summary=Mode variant.\nrequires_confirmation=no\nclosest_commands=status,help\nuser_facing_message=Variant accepted.\n"};
     }), context, closest);
-    assert_true(normalized_mode_variant.route.mode == "proposed" && normalized_mode_variant.failure_class.empty(), "mode variant command should normalize to proposed");
+    assert_true(normalized_mode_variant.route.mode == "failure" && normalized_mode_variant.acceptance_result == "accepted_failure" && normalized_mode_variant.failure_class == "provider_output_helpful_failure", "mode variant command should degrade into non-executing failure");
+
+    const auto clarification_mode = normalize_intent_routing_result(route_with_provider("laundry", context, closest, [](const std::string&) {
+        return std::string{"mode=needs_clarification\nmatched_command=procedural-upsert-activity\nargs=procedural-upsert-activity --activity-id activity.laundry\nconfidence=0.44\nreasoning_summary=Needs more specifics.\nrequires_confirmation=false\nclosest_commands=help,status\nuser_facing_message=Please provide more activity details.\n"};
+    }), context, closest);
+    assert_true(clarification_mode.route.mode == "failure" && clarification_mode.acceptance_result == "accepted_failure" && clarification_mode.failure_class == "provider_output_helpful_failure", "clarification-like mode should degrade to canonical failure");
+
+    const auto clarification_variant = normalize_intent_routing_result(route_with_provider("laundry", context, closest, [](const std::string&) {
+        return std::string{"mode=clarification\nmatched_command=\nargs=\nconfidence=0.31\nreasoning_summary=Clarification requested.\nrequires_confirmation=false\nclosest_commands=help,status\nuser_facing_message=Please clarify the task details.\n"};
+    }), context, closest);
+    assert_true(clarification_variant.route.mode == "failure" && clarification_variant.acceptance_result == "accepted_failure", "clarification variant should degrade to canonical failure");
 
     const auto ungrounded = normalize_intent_routing_result(route_with_provider("laundry", context, closest, [](const std::string&) {
         return std::string{"mode=proposed\nmatched_command=magic-household-router\nargs=magic-household-router --foo bar\nconfidence=0.88\nreasoning_summary=Invented command.\nrequires_confirmation=false\nclosest_commands=status,help\nuser_facing_message=Invented command.\n"};
@@ -1420,6 +1432,18 @@ void test_assistant_shell_live_provider_degrades_gracefully_for_invalid_routes()
 
     const auto ok_result = service.SubmitUserText({"session-live-provider", "create a weekly laundry task"});
     assert_true(ok_result.ok && !ok_result.appended_messages.empty(), "valid live provider output with confirmation false should reach the shell safely");
+    bool saw_ok_diagnostics = false;
+    for (const auto& block : ok_result.appended_messages.front().blocks) {
+        if (block.execution_summary.has_value()) {
+            saw_ok_diagnostics = true;
+            assert_true(block.execution_summary->raw_mode == "proposed", "shell should expose raw mode diagnostics");
+            assert_true(block.execution_summary->normalized_mode == "proposed", "shell should expose normalized mode diagnostics");
+            assert_true(block.execution_summary->raw_matched_command == "procedural-upsert-activity", "shell should expose raw matched command diagnostics");
+            assert_true(block.execution_summary->normalized_matched_command == "procedural-upsert-activity", "shell should expose normalized matched command diagnostics");
+            assert_true(block.execution_summary->route_acceptance_result == "accepted_proposed", "shell should expose route acceptance diagnostics");
+        }
+    }
+    assert_true(saw_ok_diagnostics, "successful live provider shell requests should include extended diagnostics");
 
     const auto confirm_result = service.SubmitUserText({"session-live-provider", "update the provider api key"});
     assert_true(confirm_result.ok && confirm_result.pending_confirmation.has_value(), "valid live provider output with confirmation true should create confirmation state safely");
@@ -1546,13 +1570,25 @@ void test_inference_transport_contracts_and_redaction() {
 
     const auto parsed = parse_openai_structured_output_to_key_value(fake->next_response.body);
     assert_true(parsed.has_value() && parsed->find("mode=proposed") != std::string::npos, "structured json schema output should normalize to key-value format");
+    assert_true(parsed.has_value() && parsed->find("raw_mode=proposed") != std::string::npos, "structured parser should preserve raw mode diagnostics");
+    assert_true(parsed.has_value() && parsed->find("raw_matched_command=procedural-upsert-activity") != std::string::npos, "structured parser should preserve raw matched command diagnostics");
     assert_true(fake->requests.back().body.find("Authoritative command catalog") != std::string::npos, "request builder should include the authoritative command catalog grounding block");
     assert_true(fake->requests.back().body.find("Few-shot examples") != std::string::npos, "request builder should include the compact few-shot grounding block");
     assert_true(fake->requests.back().body.find("oneOf") == std::string::npos, "request builder schema should not use oneOf for OpenAI compatibility");
+    assert_true(fake->requests.back().body.find("mode must be exactly proposed or failure") != std::string::npos, "request builder should harden the mode contract");
+    assert_true(fake->requests.back().body.find("Never emit values like invalid, clarification, question, informational, list, assist") != std::string::npos, "request builder should include negative mode instructions");
 
     fake->next_response = make_http_response(200, R"({"output_text":"{\"mode\":\"command\",\"matched_command\":\"status\",\"args\":\"status\",\"confidence\":\"1.3\",\"reasoning_summary\":\"Healthy\",\"requires_confirmation\":\"no\",\"closest_commands\":[\"status\",\"help\"],\"user_facing_message\":\"Ready\"}","input_tokens":1,"output_tokens":1,"total_tokens":2})", {}, true, true, "read_body", std::nullopt, {}, "application/json", "req-variant");
     const auto variant = parse_openai_structured_output_to_key_value(fake->next_response.body);
-    assert_true(variant.has_value() && variant->find("mode=proposed") != std::string::npos && variant->find("closest_commands=status,help") != std::string::npos && variant->find("requires_confirmation=false") != std::string::npos, "recoverable provider variants should normalize into the canonical key-value contract");
+    assert_true(variant.has_value() && variant->find("mode=failure") != std::string::npos && variant->find("raw_mode=command") != std::string::npos && variant->find("closest_commands=status,help") != std::string::npos && variant->find("requires_confirmation=false") != std::string::npos, "non-canonical proposal-like mode variants should degrade into canonical failure output");
+
+    fake->next_response = make_http_response(200, R"({"output_text":"{\"mode\":\"needs_clarification\",\"matched_command\":\"status\",\"args\":\"status\",\"confidence\":\"0.4\",\"reasoning_summary\":\"Need more detail\",\"requires_confirmation\":\"false\",\"closest_commands\":[\"help\",\"status\"],\"user_facing_message\":\"Please clarify.\"}","input_tokens":1,"output_tokens":1,"total_tokens":2})", {}, true, true, "read_body", std::nullopt, {}, "application/json", "req-needs-clarification");
+    const auto clarification = parse_openai_structured_output_to_key_value(fake->next_response.body);
+    assert_true(clarification.has_value() && clarification->find("mode=failure") != std::string::npos && clarification->find("raw_mode=needs_clarification") != std::string::npos, "clarification-like provider modes should degrade to canonical failure");
+
+    fake->next_response = make_http_response(200, R"({"output_text":"{\"mode\":\"clarification\",\"matched_command\":\"\",\"args\":\"\",\"confidence\":\"0.2\",\"reasoning_summary\":\"Clarify\",\"requires_confirmation\":\"false\",\"closest_commands\":[\"help\"],\"user_facing_message\":\"Please clarify.\"}","input_tokens":1,"output_tokens":1,"total_tokens":2})", {}, true, true, "read_body", std::nullopt, {}, "application/json", "req-clarification");
+    const auto clarification_variant = parse_openai_structured_output_to_key_value(fake->next_response.body);
+    assert_true(clarification_variant.has_value() && clarification_variant->find("mode=failure") != std::string::npos && clarification_variant->find("raw_mode=clarification") != std::string::npos, "clarification variants should degrade to canonical failure");
 }
 
 void test_provider_validation_paths_and_setup_service() {

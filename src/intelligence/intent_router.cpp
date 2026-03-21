@@ -92,8 +92,9 @@ bool is_known_command(const IntentCommandContext& context, const std::string& co
 std::string normalize_mode_value(const std::string& value) {
     const auto lowered = lower_copy(trim_copy(value));
     if (lowered.empty()) return "failure";
-    if (lowered == "proposed" || lowered == "command" || lowered == "proposal" || lowered == "success") return "proposed";
-    if (lowered == "failure" || lowered == "no_match" || lowered == "error") return "failure";
+    if (lowered == "proposed") return "proposed";
+    if (lowered == "failure" || lowered == "no_match" || lowered == "error" || lowered == "command" || lowered == "needs_clarification" ||
+        lowered == "clarification" || lowered == "question" || lowered == "capability_help") return "failure";
     return {};
 }
 
@@ -170,8 +171,12 @@ IntentRoutingResult route_with_provider(const std::string& input,
         return result;
     }
 
+    if (const auto it = parsed.find("raw_mode"); it != parsed.end()) result.raw_mode = it->second;
     if (const auto it = parsed.find("mode"); it != parsed.end()) result.mode = it->second;
+    if (result.raw_mode.empty()) result.raw_mode = result.mode;
+    if (const auto it = parsed.find("raw_matched_command"); it != parsed.end()) result.raw_matched_command = it->second;
     if (const auto it = parsed.find("matched_command"); it != parsed.end()) result.matched_command = it->second;
+    if (result.raw_matched_command.empty()) result.raw_matched_command = result.matched_command;
     if (const auto it = parsed.find("args"); it != parsed.end()) result.args = split_args(it->second);
     if (const auto it = parsed.find("confidence"); it != parsed.end() && !try_parse_double(it->second, result.confidence)) {
         result.reasoning_summary = "Provider returned malformed confidence.";
@@ -233,7 +238,9 @@ IntentRouteNormalizationOutcome normalize_intent_routing_result(IntentRoutingRes
     auto& route = outcome.route;
 
     route.mode = trim_copy(route.mode);
+    route.raw_mode = trim_copy(route.raw_mode);
     route.matched_command = normalize_command_alias_value(route.matched_command);
+    route.raw_matched_command = trim_copy(route.raw_matched_command);
     route.reasoning_summary = trim_copy(route.reasoning_summary);
     route.user_facing_message = trim_copy(route.user_facing_message);
     route.closest_commands.erase(std::remove_if(route.closest_commands.begin(), route.closest_commands.end(), [](const std::string& value) { return trim_copy(value).empty(); }), route.closest_commands.end());
@@ -241,6 +248,9 @@ IntentRouteNormalizationOutcome normalize_intent_routing_result(IntentRoutingRes
     if (!std::isfinite(route.confidence)) route.confidence = 0.0;
     if (route.confidence < 0.0) route.confidence = 0.0;
     if (route.confidence > 1.0) route.confidence = 1.0;
+
+    if (route.raw_mode.empty()) route.raw_mode = route.mode;
+    if (route.raw_matched_command.empty()) route.raw_matched_command = route.matched_command;
 
     const auto canonical_mode = normalize_mode_value(route.mode);
     if (!canonical_mode.empty()) route.mode = canonical_mode;
@@ -311,7 +321,9 @@ IntentRouteNormalizationOutcome normalize_intent_routing_result(IntentRoutingRes
 std::string serialize_intent_routing_result(const IntentRoutingResult& result) {
     std::ostringstream output;
     output << "mode=" << result.mode << '\n';
+    output << "raw_mode=" << result.raw_mode << '\n';
     output << "matched_command=" << result.matched_command << '\n';
+    output << "raw_matched_command=" << result.raw_matched_command << '\n';
     output << "args=" << join_strings(result.args, " ") << '\n';
     output << "confidence=" << result.confidence << '\n';
     output << "reasoning_summary=" << result.reasoning_summary << '\n';

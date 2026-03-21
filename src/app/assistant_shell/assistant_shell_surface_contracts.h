@@ -28,7 +28,9 @@ struct AssistantShellExecutionSummary {
     bool provider_used = false;
     std::vector<std::string> artifact_refreshes;
     std::string explanation;
+    std::string raw_mode;
     std::string normalized_mode;
+    std::string raw_matched_command;
     std::string normalized_matched_command;
     std::string route_acceptance_result;
     std::string route_rejection_reason;

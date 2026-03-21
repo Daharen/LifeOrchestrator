@@ -43,6 +43,9 @@ std::string grounding_instruction() {
     std::ostringstream out;
     out << "You are the intent router. Return only the canonical routing JSON object with fields mode, matched_command, args, confidence, reasoning_summary, requires_confirmation, closest_commands, user_facing_message. ";
     out << "Choose only from the command catalog below. Do not invent commands. If nothing fits, return mode failure with matched_command empty, args empty, and a helpful grounded user_facing_message. ";
+    out << "mode must be exactly proposed or failure. Do not use synonyms. Do not use explanatory prose instead of the canonical value. ";
+    out << "Never emit values like invalid, clarification, question, informational, list, assist, or any other mode not in the contract. ";
+    out << "matched_command must be empty when mode=failure. ";
     out << "If the request is vague, exploratory, or about broad capabilities, prefer a grounded help-oriented failure or the help command rather than hallucinating an action route. ";
     out << "For mode=proposed, matched_command must be one of the catalog command ids, args must be one canonical CLI-style command string, and closest_commands must be a comma-delimited string of catalog commands.\n";
     out << "Authoritative command catalog:\n";

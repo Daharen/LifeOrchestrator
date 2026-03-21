@@ -458,6 +458,8 @@ AssistantShellSubmissionResult AssistantShellSurfaceService::SubmitUserText(cons
             if (exec_summary.provider_used && exec_summary.selected_route.empty()) failure_classification = "provider_output_incomplete";
 
             exec_summary.normalized_mode = sanitize_shell_field(value_for_key(combined, "normalized_mode"), 48);
+            exec_summary.raw_mode = sanitize_shell_field(value_for_key(combined, "raw_mode"), 48);
+            exec_summary.raw_matched_command = sanitize_shell_field(value_for_key(combined, "raw_matched_command"), 96);
             exec_summary.normalized_matched_command = sanitize_shell_field(value_for_key(combined, "normalized_matched_command"), 96);
             exec_summary.route_acceptance_result = sanitize_shell_field(value_for_key(combined, "route_acceptance_result"), 96);
             exec_summary.route_rejection_reason = sanitize_shell_field(value_for_key(combined, "route_rejection_reason"), 96);
@@ -475,7 +477,11 @@ AssistantShellSubmissionResult AssistantShellSurfaceService::SubmitUserText(cons
             }
 
             exec_summary.explanation = exec_summary.provider_used
-                                           ? sanitize_shell_field("mode=" + exec_summary.normalized_mode + "; command=" + exec_summary.normalized_matched_command + "; acceptance=" + exec_summary.route_acceptance_result + (exec_summary.route_rejection_reason.empty() ? std::string{} : "; rejection=" + exec_summary.route_rejection_reason), 240)
+                                           ? sanitize_shell_field("raw_mode=" + exec_summary.raw_mode + "; normalized_mode=" + exec_summary.normalized_mode +
+                                                                      "; raw_command=" + exec_summary.raw_matched_command + "; normalized_command=" + exec_summary.normalized_matched_command +
+                                                                      "; acceptance=" + exec_summary.route_acceptance_result +
+                                                                      (exec_summary.route_rejection_reason.empty() ? std::string{} : "; rejection=" + exec_summary.route_rejection_reason),
+                                                                  240)
                                            : "The shell matched an exact command or alias through the authoritative helper surface first.";
             if (exec_summary.provider_used && exec_summary.explanation.empty()) exec_summary.explanation = "Provider output omitted a reasoning summary.";
 
