@@ -200,7 +200,7 @@ void ProviderSetupWindow::Layout() {
     const int gutter = 10;
     const int list_width = std::clamp(width / 3, 220, 300);
     const int button_row_height = 30;
-    const int status_height = std::max(140, height / 4);
+    const int status_height = (std::max)(140, height / 4);
     const int form_left = margin + list_width + gutter;
     const int form_width = width - form_left - margin;
     const int top_height = height - (margin * 2) - gutter - status_height;
@@ -231,7 +231,7 @@ void ProviderSetupWindow::Layout() {
 
     MoveWindow(enabled_checkbox_, form_left, y, 120, edit_height, TRUE);
     const int button_width = 88;
-    int button_x = form_left + std::max(130, form_width - ((button_width + 6) * 4));
+    int button_x = form_left + (std::max)(130, form_width - ((button_width + 6) * 4));
     MoveWindow(refresh_button_, button_x, y, button_width, button_row_height, TRUE); button_x += button_width + 6;
     MoveWindow(save_button_, button_x, y, button_width, button_row_height, TRUE); button_x += button_width + 6;
     MoveWindow(test_button_, button_x, y, button_width, button_row_height, TRUE); button_x += button_width + 6;
