@@ -1492,11 +1492,14 @@ ApplicationExitCode execute_command(ApplicationRuntime& runtime,
             const auto health = inference_client.CheckProvider(*record, api_key, "provider-health-" + core::current_timestamp_utc());
             if (!health.ok) {
                 const auto failure_class = health.error.has_value() ? health.error->failure_class : std::string{"transport_failure"};
-                const auto http_status = health.http_status > 0 ? std::to_string(health.http_status) : std::string{"none"};
+                const auto http_status = health.http_status.has_value() ? std::to_string(*health.http_status) : std::string{"none"};
                 const auto failure_stage = default_if_empty(health.failure_stage, "none");
                 const auto request_id = default_if_empty(health.response_request_id, "none");
+                const auto win32_error_code = health.win32_error_code.has_value() ? std::to_string(*health.win32_error_code) : std::string{"none"};
+                const auto win32_error_message = default_if_empty(health.win32_error_message, "none");
                 const auto response_preview = default_if_empty(health.safe_response_preview, "none");
-                const auto summary = std::string{"failed failure_class="} + failure_class + " http_status=" + http_status + " failure_stage=" + failure_stage + " request_id=" + request_id + " outbound_request_attempted=" + (health.outbound_request_attempted ? "true" : "false") + " response_preview=" + response_preview;
+                const auto response_content_type = default_if_empty(health.response_content_type, "none");
+                const auto summary = std::string{"failed failure_class="} + failure_class + " failure_stage=" + failure_stage + " win32_error_code=" + win32_error_code + " win32_error_message=" + win32_error_message + " http_status=" + http_status + " request_id=" + request_id + " outbound_request_attempted=" + (health.outbound_request_attempted ? "true" : "false") + " response_content_type=" + response_content_type + " response_preview=" + response_preview;
                 error << "integration_test_provider=failed\n"
                       << "message=" << failure_class << '\n'
                       << "summary=" << summary << '\n'
@@ -1506,15 +1509,17 @@ ApplicationExitCode execute_command(ApplicationRuntime& runtime,
                       << "secret_resolved=" << (health.secret_resolved ? "true" : "false") << '\n'
                       << "outbound_request_attempted=" << (health.outbound_request_attempted ? "true" : "false") << '\n'
                       << "failure_class=" << failure_class << '\n'
-                      << "http_status=" << http_status << '\n'
                       << "failure_stage=" << failure_stage << '\n'
+                      << "win32_error_code=" << win32_error_code << '\n'
+                      << "win32_error_message=" << win32_error_message << '\n'
+                      << "http_status=" << http_status << '\n'
                       << "request_id=" << request_id << '\n'
-                      << "response_content_type=" << default_if_empty(health.response_content_type, "none") << '\n'
+                      << "response_content_type=" << response_content_type << '\n'
                       << "response_preview=" << response_preview << '\n';
                 return complete(ApplicationExitCode::RuntimeOperationFailure, "Integration provider readiness failed.");
             }
             output << "integration_test_provider=ok\n"
-                   << "summary=ok failure_class=none http_status=none failure_stage=none request_id=none outbound_request_attempted=" << (health.outbound_request_attempted ? "true" : "false") << " response_preview=none\n"
+                   << "summary=ok failure_class=none failure_stage=none win32_error_code=none win32_error_message=none http_status=none request_id=none outbound_request_attempted=" << (health.outbound_request_attempted ? "true" : "false") << " response_content_type=none response_preview=none\n"
                    << "provider_name=" << record->integration_id << '\n'
                    << "model_name=" << default_if_empty(record->non_secret_settings.contains("model_name") ? record->non_secret_settings.at("model_name") : std::string{}, "unset") << '\n'
                    << "metadata_loaded=" << (health.metadata_loaded ? "true" : "false") << '\n'
@@ -1522,8 +1527,10 @@ ApplicationExitCode execute_command(ApplicationRuntime& runtime,
                    << "outbound_request_attempted=" << (health.outbound_request_attempted ? "true" : "false") << '\n'
                    << "structured_result_returned=" << (health.inference_result.has_value() && health.inference_result->ok ? "true" : "false") << '\n'
                    << "failure_class=none\n"
-                   << "http_status=none\n"
                    << "failure_stage=none\n"
+                   << "win32_error_code=none\n"
+                   << "win32_error_message=none\n"
+                   << "http_status=none\n"
                    << "request_id=none\n"
                    << "response_content_type=none\n"
                    << "response_preview=none\n"

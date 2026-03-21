@@ -24,16 +24,41 @@
 #include <fstream>
 #include <iostream>
 #include <numeric>
+#include <optional>
 #include <sstream>
 #include <stdexcept>
 #include <vector>
 
 namespace {
 
+life_orchestrator::integration::inference::HttpResponseSpec make_http_response(
+    std::optional<int> http_status,
+    std::string body,
+    std::string transport_error_text,
+    bool success,
+    bool network_success,
+    std::string failure_stage,
+    std::optional<unsigned long> win32_error_code = std::nullopt,
+    std::string win32_error_message = {},
+    std::string response_content_type = {},
+    std::string response_request_id = {},
+    std::string safe_error_summary = {},
+    std::string safe_body_preview = {}) {
+    return {http_status, {}, std::move(body), std::move(transport_error_text), success, network_success, std::move(failure_stage), win32_error_code, std::move(win32_error_message), std::move(response_content_type), std::move(response_request_id), std::move(safe_error_summary), std::move(safe_body_preview)};
+}
 
 struct FakeHttpExecutor final : life_orchestrator::integration::inference::IHttpExecutor {
     mutable std::vector<life_orchestrator::integration::inference::HttpRequestSpec> requests;
-    life_orchestrator::integration::inference::HttpResponseSpec next_response{200, {}, R"({"output_text":"{\"mode\":\"proposed\",\"matched_command\":\"procedural-upsert-activity\",\"args\":\"procedural-upsert-activity --activity-id activity.weekly-laundry --title WeeklyLaundry --domain-source home --frequency weekly --duration-minutes 60 --effort-estimate 4 --outcome-value 6\",\"confidence\":0.92,\"reasoning_summary\":\"Weekly laundry maps cleanly.\",\"requires_confirmation\":false,\"closest_commands\":\"procedural-upsert-activity,status\",\"user_facing_message\":\"Mapped request safely.\"}","input_tokens":11,"output_tokens":7,"total_tokens":18})", {}, true, true, {}, "application/json", {}, {}, {}};
+    life_orchestrator::integration::inference::HttpResponseSpec next_response = make_http_response(
+        200,
+        R"({"output_text":"{\"mode\":\"proposed\",\"matched_command\":\"procedural-upsert-activity\",\"args\":\"procedural-upsert-activity --activity-id activity.weekly-laundry --title WeeklyLaundry --domain-source home --frequency weekly --duration-minutes 60 --effort-estimate 4 --outcome-value 6\",\"confidence\":0.92,\"reasoning_summary\":\"Weekly laundry maps cleanly.\",\"requires_confirmation\":false,\"closest_commands\":\"procedural-upsert-activity,status\",\"user_facing_message\":\"Mapped request safely.\"}","input_tokens":11,"output_tokens":7,"total_tokens":18})",
+        {},
+        true,
+        true,
+        {},
+        std::nullopt,
+        {},
+        "application/json");
 
     life_orchestrator::integration::inference::HttpResponseSpec Execute(const life_orchestrator::integration::inference::HttpRequestSpec& request) const override {
         requests.push_back(request);
@@ -1479,7 +1504,7 @@ void test_provider_setup_controller_round_trip() {
 void test_openai_transport_failure_and_registry_behavior() {
     using namespace life_orchestrator::integration::inference;
     auto fake = std::make_shared<FakeHttpExecutor>();
-    fake->next_response = {429, {}, "{}", {}, true, true, "receive_response", "application/json", "req-rate-1", "rate limited", "{}"};
+    fake->next_response = make_http_response(429, "{}", {}, true, true, "receive_response", std::nullopt, {}, "application/json", "req-rate-1", "rate limited", "{}");
     InferenceTransportClient client(fake);
     const life_orchestrator::core::IntegrationConfigurationRecord record{
         "provider.openai", "OpenAI", "OpenAI", true, life_orchestrator::core::IntegrationStatus::Enabled, {}, {},
@@ -1499,33 +1524,33 @@ void test_openai_transport_diagnostic_matrix() {
         life_orchestrator::core::CredentialStorageMode::ExternalSecretReference, "config/providers/openai.secret",
         {{"model_name", "gpt-5"}}, "2026-03-21T00:00:00.000Z", "2026-03-21T00:00:00.000Z", 1};
 
-    fake->next_response = {401, {}, R"({"error":{"message":"Bad API key TEST_KEY_123","type":"invalid_request_error","code":"invalid_api_key"}})", {}, true, true, "receive_response", "application/json", "req-auth", "invalid key", R"({"error":{"message":"Bad API key TEST_KEY_123"}})"};
+    fake->next_response = make_http_response(401, R"({"error":{"message":"Bad API key TEST_KEY_123","type":"invalid_request_error","code":"invalid_api_key"}})", {}, true, true, "receive_response", std::nullopt, {}, "application/json", "req-auth", "invalid key", R"({"error":{"message":"Bad API key TEST_KEY_123"}})");
     auto result = client.Interpret(record, "TEST_KEY_123", "req-auth", {{"user", "test"}});
     assert_true(!result.ok && result.error.has_value() && result.error->failure_class == "authentication_failure", "401 should map to authentication_failure");
     assert_true(result.error->safe_body_preview.find("TEST_KEY_123") == std::string::npos, "401 preview should redact secrets");
 
-    fake->next_response = {400, {}, R"({"error":{"message":"Bad model","type":"invalid_request_error","code":"invalid_model"}})", {}, true, true, "receive_response", "application/json", "req-bad", "bad request", R"({"error":{"message":"Bad model"}})"};
+    fake->next_response = make_http_response(400, R"({"error":{"message":"Bad model","type":"invalid_request_error","code":"invalid_model"}})", {}, true, true, "receive_response", std::nullopt, {}, "application/json", "req-bad", "bad request", R"({"error":{"message":"Bad model"}})");
     result = client.Interpret(record, "TEST_KEY_123", "req-bad", {{"user", "test"}});
     assert_true(!result.ok && result.error.has_value() && result.error->failure_class == "bad_request", "400 should map to bad_request");
 
-    fake->next_response = {429, {}, R"({"error":{"message":"Too many requests","type":"rate_limit_error","code":"rate_limit_exceeded"}})", {}, true, true, "receive_response", "application/json", "req-429", "rate limited", R"({"error":{"message":"Too many requests"}})"};
+    fake->next_response = make_http_response(429, R"({"error":{"message":"Too many requests","type":"rate_limit_error","code":"rate_limit_exceeded"}})", {}, true, true, "receive_response", std::nullopt, {}, "application/json", "req-429", "rate limited", R"({"error":{"message":"Too many requests"}})");
     result = client.Interpret(record, "TEST_KEY_123", "req-429", {{"user", "test"}});
     assert_true(!result.ok && result.error.has_value() && result.error->failure_class == "rate_limited", "429 should map to rate_limited");
 
-    fake->next_response = {500, {}, R"({"error":{"message":"Server exploded","type":"server_error","code":"internal_error"}})", {}, true, true, "receive_response", "application/json", "req-500", "server failure", R"({"error":{"message":"Server exploded"}})"};
+    fake->next_response = make_http_response(500, R"({"error":{"message":"Server exploded","type":"server_error","code":"internal_error"}})", {}, true, true, "receive_response", std::nullopt, {}, "application/json", "req-500", "server failure", R"({"error":{"message":"Server exploded"}})");
     result = client.Interpret(record, "TEST_KEY_123", "req-500", {{"user", "test"}});
     assert_true(!result.ok && result.error.has_value() && result.error->failure_class == "server_error", "500 should map to server_error");
 
-    fake->next_response = {0, {}, {}, "connect failed", false, false, "connect", {}, {}, "connect failed", "Authorization: Bearer TEST_KEY_123"};
+    fake->next_response = make_http_response(std::nullopt, {}, "connect failed", false, false, "connect", std::optional<unsigned long>{12029}, "connect failed", {}, {}, "connect failed", "Authorization: Bearer TEST_KEY_123");
     result = client.Interpret(record, "TEST_KEY_123", "req-connect", {{"user", "test"}});
     assert_true(!result.ok && result.error.has_value() && result.error->failure_stage == "connect", "network failure should retain stage");
     assert_true(result.error->safe_body_preview.find("TEST_KEY_123") == std::string::npos, "network diagnostics should redact secrets");
 
-    fake->next_response = {200, {}, R"({"output_text":"{"mode":"proposed","matched_command":"status","args":"status","confidence":0.91,"reasoning_summary":"Healthy","requires_confirmation":false,"closest_commands":"status,help","user_facing_message":"Ready"}","input_tokens":1,"output_tokens":1,"total_tokens":2})", {}, true, true, "read_body", "application/json", "req-200", {}, {}};
+    fake->next_response = make_http_response(200, R"({"output_text":"{"mode":"proposed","matched_command":"status","args":"status","confidence":0.91,"reasoning_summary":"Healthy","requires_confirmation":false,"closest_commands":"status,help","user_facing_message":"Ready"}","input_tokens":1,"output_tokens":1,"total_tokens":2})", {}, true, true, "read_body", std::nullopt, {}, "application/json", "req-200");
     result = client.Interpret(record, "TEST_KEY_123", "req-200", {{"user", "test"}});
     assert_true(result.ok, "200 structured response should succeed");
 
-    fake->next_response = {200, {}, "<html>nope</html>", {}, true, true, "read_body", "text/html", "req-malformed", "malformed body", "<html>nope</html>"};
+    fake->next_response = make_http_response(200, "<html>nope</html>", {}, true, true, "read_body", std::nullopt, {}, "text/html", "req-malformed", "malformed body", "<html>nope</html>");
     result = client.Interpret(record, "TEST_KEY_123", "req-malformed", {{"user", "test"}});
     assert_true(!result.ok && result.error.has_value() && result.error->failure_class == "schema_parse_failure", "200 malformed body should map to schema_parse_failure");
 }
@@ -1545,6 +1570,33 @@ void test_integration_test_provider_output_diagnostics() {
     assert_true(text_out.find("http_status=none") != std::string::npos, "diagnostic output should expose http status placeholder");
     assert_true(text_out.find("failure_stage=none") != std::string::npos, "diagnostic output should expose failure stage placeholder");
     assert_true(text_out.find("outbound_request_attempted=false") != std::string::npos, "diagnostic output should expose outbound attempt flag");
+}
+
+
+void test_openai_transport_stage_accurate_outbound_attempts_and_diagnostics() {
+    using namespace life_orchestrator::integration::inference;
+    auto fake = std::make_shared<FakeHttpExecutor>();
+    InferenceTransportClient client(fake);
+    const life_orchestrator::core::IntegrationConfigurationRecord record{
+        "provider.openai", "OpenAI", "OpenAI", true, life_orchestrator::core::IntegrationStatus::Enabled, {}, {},
+        life_orchestrator::core::CredentialStorageMode::ExternalSecretReference, "config/providers/openai.secret",
+        {{"model_name", "gpt-5"}}, "2026-03-21T00:00:00.000Z", "2026-03-21T00:00:00.000Z", 1};
+
+    const std::vector<std::pair<std::string, bool>> stages = {
+        {"open_session", false}, {"connect", false}, {"open_request", false},
+        {"send_request", true}, {"receive_response", true}, {"read_body", true}
+    };
+    for (const auto& [stage, attempted] : stages) {
+        fake->next_response = make_http_response(std::nullopt, {}, stage + " failed with Authorization: Bearer TEST_KEY_123", false, attempted, stage, std::optional<unsigned long>{12000 + static_cast<unsigned long>(stage.size())}, stage + " failed", {}, {}, stage + " failed", "Authorization: Bearer TEST_KEY_123");
+        const auto result = client.Interpret(record, "TEST_KEY_123", "req-" + stage, {{"user", "test"}});
+        assert_true(!result.ok && result.error.has_value(), stage + " should fail");
+        assert_true(result.error->failure_class == stage + "_failure", stage + " should map to stage-specific failure class");
+        assert_true(result.error->outbound_request_attempted == attempted, stage + " should preserve outbound_request_attempted semantics");
+        assert_true(result.error->win32_error_code.has_value(), stage + " should retain Win32 error codes");
+        assert_true(result.error->win32_error_message == stage + " failed", stage + " should retain Win32 error messages");
+        assert_true(result.error->safe_error_summary.find("TEST_KEY_123") == std::string::npos, stage + " summary should redact secrets");
+        assert_true(result.error->safe_body_preview.find("TEST_KEY_123") == std::string::npos, stage + " preview should redact secrets");
+    }
 }
 
 void test_composer_input_and_attachment_persistence() {
@@ -1616,6 +1668,7 @@ int main() {
         test_provider_setup_controller_round_trip();
         test_openai_transport_failure_and_registry_behavior();
         test_openai_transport_diagnostic_matrix();
+        test_openai_transport_stage_accurate_outbound_attempts_and_diagnostics();
         test_integration_test_provider_output_diagnostics();
         test_composer_input_and_attachment_persistence();
     } catch (const std::exception& e) {

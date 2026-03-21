@@ -36,11 +36,13 @@ struct InferenceTransportUsage {
 struct InferenceTransportError {
     std::string failure_class;
     std::string message;
-    int status_code = 0;
+    std::optional<int> status_code;
     bool retryable = false;
     bool outbound_request_attempted = false;
     std::string failure_stage;
     std::string request_id;
+    std::optional<unsigned long> win32_error_code;
+    std::string win32_error_message;
     std::string response_content_type;
     std::string safe_error_summary;
     std::string safe_body_preview;
@@ -71,8 +73,10 @@ struct ProviderHealthCheckResult {
     bool secret_resolved = false;
     bool outbound_request_attempted = false;
     std::string failure_stage;
-    int http_status = 0;
+    std::optional<int> http_status;
     std::string response_request_id;
+    std::optional<unsigned long> win32_error_code;
+    std::string win32_error_message;
     std::string response_content_type;
     std::string safe_response_preview;
     std::optional<InferenceTransportResult> inference_result;

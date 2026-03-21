@@ -58,8 +58,10 @@ std::string sanitize_diagnostic_text(const std::string& value, std::size_t max_l
 
 std::string summarize_transport_error(const InferenceTransportError& error) {
     std::string summary = error.failure_class + ":" + sanitize_diagnostic_text(error.message, k_default_preview_limit / 2);
-    if (error.status_code > 0) summary += " status=" + std::to_string(error.status_code);
+    if (error.status_code.has_value()) summary += " status=" + std::to_string(*error.status_code);
     if (!error.failure_stage.empty()) summary += " stage=" + error.failure_stage;
+    if (error.win32_error_code.has_value()) summary += " win32_error=" + std::to_string(*error.win32_error_code);
+    if (!error.win32_error_message.empty()) summary += " win32_message=" + sanitize_diagnostic_text(error.win32_error_message, 160);
     if (!error.request_id.empty()) summary += " request_id=" + sanitize_diagnostic_text(error.request_id, 64);
     if (!error.safe_error_summary.empty()) summary += " detail=" + sanitize_diagnostic_text(error.safe_error_summary, k_default_preview_limit / 2);
     if (!error.safe_body_preview.empty()) summary += " preview=" + sanitize_diagnostic_text(error.safe_body_preview, 160);
