@@ -1,25 +1,34 @@
 #pragma once
 #ifdef _WIN32
+#include "ui/assistant_shell/assistant_shell_confirmation_surface.h"
 #include "ui/assistant_shell/assistant_shell_controller.h"
 #include "ui/assistant_shell/assistant_shell_message_surface.h"
 #include "ui/assistant_shell/assistant_shell_status_bar.h"
 #include "ui/assistant_shell/assistant_shell_tool_panel.h"
-#include "ui/assistant_shell/assistant_shell_confirmation_surface.h"
+#include "ui/provider_setup/provider_setup_window.h"
+
 #include <memory>
 #include <optional>
 #include <string>
 #include <vector>
+
 namespace life_orchestrator::ui::assistant_shell {
+
 class AssistantShellWindow {
 public:
     explicit AssistantShellWindow(std::shared_ptr<AssistantShellController> controller);
     int Run(HINSTANCE instance, int show_command);
+
 private:
     static LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM w_param, LPARAM l_param);
+    static LRESULT CALLBACK ComposerEditProc(HWND hwnd, UINT message, WPARAM w_param, LPARAM l_param);
+
     LRESULT HandleMessage(UINT message, WPARAM w_param, LPARAM l_param);
     void CreateUi();
     void InitializeShell();
     void Layout();
+    void AttachComposerSubclass();
+    void RefreshTranscriptText();
     void AppendMessage(const life_orchestrator::app::assistant_shell::AssistantShellMessage& message);
     void UpdateStatus(const life_orchestrator::app::assistant_shell::AssistantShellStatusSnapshot& status_snapshot);
     void UpdateToolPanel(const std::vector<life_orchestrator::app::assistant_shell::AssistantShellToolPanelSection>& sections);
@@ -48,6 +57,7 @@ private:
     HWND toggle_panel_button_ = nullptr;
     HWND confirm_accept_button_ = nullptr;
     HWND confirm_decline_button_ = nullptr;
+    WNDPROC composer_original_wndproc_ = nullptr;
     AssistantShellMessageSurface transcript_;
     AssistantShellConfirmationSurface confirmation_;
     AssistantShellStatusBar status_;
@@ -57,6 +67,8 @@ private:
     bool tool_panel_visible_ = true;
     std::vector<std::string> transcript_lines_;
     std::optional<life_orchestrator::app::assistant_shell::AssistantShellConfirmationRequest> pending_confirmation_;
+    std::unique_ptr<life_orchestrator::ui::provider_setup::ProviderSetupWindow> provider_setup_window_;
 };
+
 }  // namespace life_orchestrator::ui::assistant_shell
 #endif

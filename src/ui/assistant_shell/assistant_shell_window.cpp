@@ -1,7 +1,8 @@
 #include "ui/assistant_shell/assistant_shell_window.h"
 #ifdef _WIN32
 #include "ui/assistant_shell/assistant_shell_composer_input.h"
-#include "ui/assistant_shell/assistant_shell_composer_input.h"
+#include "app/provider_setup/provider_setup_service.h"
+#include "ui/provider_setup/provider_setup_controller.h"
 #ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
 #endif
@@ -13,6 +14,7 @@
 #include <shellapi.h>
 
 #include <algorithm>
+#include <cstdlib>
 #include <filesystem>
 #include <sstream>
 #include <string>
@@ -146,13 +148,6 @@ LRESULT AssistantShellWindow::HandleMessage(UINT message, WPARAM w_param, LPARAM
             if (id == kMenuSettings) { ShowSettings(); return 0; }
             return 0;
         }
-        case WM_KEYDOWN:
-            if (GetFocus() == composer_edit_ && w_param == VK_RETURN &&
-                AssistantShellComposerInput::ResolveEnterKey((GetKeyState(VK_SHIFT) & 0x8000) != 0) == ComposerSubmitAction::Submit) {
-                SubmitComposer();
-                return 0;
-            }
-            break;
         case WM_DESTROY: PostQuitMessage(0); return 0;
         default: break;
     }
@@ -185,6 +180,7 @@ void AssistantShellWindow::CreateUi() {
     confirm_decline_button_ = CreateWindowExW(0, L"BUTTON", L"Cancel", WS_CHILD, 0, 0, 0, 0, hwnd_, control_menu_id(kControlConfirmDecline), instance_, nullptr);
 
     SendMessageW(composer_edit_, EM_SETLIMITTEXT, 8000, 0);
+    AttachComposerSubclass();
     Layout();
 }
 
@@ -263,6 +259,16 @@ void AssistantShellWindow::AppendMessage(const app::assistant_shell::AssistantSh
         }
         transcript_lines_.push_back(line.str());
     }
+    RefreshTranscriptText();
+}
+
+void AssistantShellWindow::AttachComposerSubclass() {
+    SetWindowLongPtrW(composer_edit_, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(this));
+    composer_original_wndproc_ = reinterpret_cast<WNDPROC>(SetWindowLongPtrW(
+        composer_edit_, GWLP_WNDPROC, reinterpret_cast<LONG_PTR>(&AssistantShellWindow::ComposerEditProc)));
+}
+
+void AssistantShellWindow::RefreshTranscriptText() {
     std::ostringstream combined;
     for (std::size_t index = 0; index < transcript_lines_.size(); ++index) {
         if (index > 0) combined << "\r\n\r\n";
@@ -270,6 +276,23 @@ void AssistantShellWindow::AppendMessage(const app::assistant_shell::AssistantSh
     }
     transcript_.SetText(combined.str());
 }
+
+LRESULT CALLBACK AssistantShellWindow::ComposerEditProc(HWND hwnd, UINT message, WPARAM w_param, LPARAM l_param) {
+    auto* self = reinterpret_cast<AssistantShellWindow*>(GetWindowLongPtrW(hwnd, GWLP_USERDATA));
+    if (self == nullptr || self->composer_original_wndproc_ == nullptr) return DefWindowProcW(hwnd, message, w_param, l_param);
+
+    const bool is_return = (message == WM_KEYDOWN && w_param == VK_RETURN) || (message == WM_CHAR && w_param == '\r');
+    if (is_return) {
+        const bool shift_pressed = (GetKeyState(VK_SHIFT) & 0x8000) != 0;
+        if (AssistantShellComposerInput::ResolveEnterKey(shift_pressed) == ComposerSubmitAction::Submit) {
+            if (message == WM_KEYDOWN) self->SubmitComposer();
+            return 0;
+        }
+    }
+
+    return CallWindowProcW(self->composer_original_wndproc_, hwnd, message, w_param, l_param);
+}
+
 
 void AssistantShellWindow::UpdateStatus(const app::assistant_shell::AssistantShellStatusSnapshot& status_snapshot) {
     status_.SetSnapshot(status_snapshot);
@@ -306,14 +329,7 @@ void AssistantShellWindow::ResolveConfirmation(bool accepted) {
     if (!pending_confirmation_.has_value()) return;
     const auto confirmation = controller_->ResolveConfirmation(session_id_, pending_confirmation_->confirmation_id, accepted);
     transcript_lines_.push_back(std::string{"Assistant: "} + confirmation.assistant_message);
-    transcript_.SetText([&] {
-        std::ostringstream combined;
-        for (std::size_t index = 0; index < transcript_lines_.size(); ++index) {
-            if (index > 0) combined << "\r\n\r\n";
-            combined << transcript_lines_[index];
-        }
-        return combined.str();
-    }());
+    RefreshTranscriptText();
     pending_confirmation_.reset();
     UpdateConfirmationSurface();
     if (const auto status = controller_->LoadLastStatus(session_id_); status.has_value()) UpdateStatus(*status);
@@ -352,14 +368,24 @@ void AssistantShellWindow::OpenConsole() {
         CloseHandle(process.hThread);
         CloseHandle(process.hProcess);
         transcript_lines_.push_back("System: Opened the operator console in a separate terminal window.");
-        transcript_.SetText([&] { std::ostringstream s; for (std::size_t i = 0; i < transcript_lines_.size(); ++i) { if (i) s << "\r\n\r\n"; s << transcript_lines_[i]; } return s.str(); }());
+        RefreshTranscriptText();
         return;
     }
     ShowInfoDialog(L"Console", "Failed to launch the operator console path.");
 }
 
 void AssistantShellWindow::OpenProviderConfiguration() {
-    OpenSiblingExecutable(L"life_orchestrator_admin_gui.exe", L"API Keys", "Opened the provider configuration surface.");
+    const char* env = std::getenv("LIFE_ORCHESTRATOR_DATA_ROOT");
+    const std::string environment_data_root = env == nullptr ? std::string{"artifacts"} : std::string{env};
+    const std::filesystem::path data_root{environment_data_root};
+    if (!provider_setup_window_) {
+        auto service = std::make_shared<app::provider_setup::ProviderSetupService>(data_root, std::filesystem::current_path(), environment_data_root);
+        auto controller = std::make_shared<ui::provider_setup::ProviderSetupController>(service);
+        provider_setup_window_ = std::make_unique<ui::provider_setup::ProviderSetupWindow>(controller);
+    }
+    provider_setup_window_->Show(instance_, hwnd_);
+    transcript_lines_.push_back("System: Opened the provider configuration surface.");
+    RefreshTranscriptText();
 }
 
 void AssistantShellWindow::ShowActiveModules() {
@@ -400,7 +426,7 @@ void AssistantShellWindow::OpenSiblingExecutable(const wchar_t* executable_name,
         return;
     }
     transcript_lines_.push_back("System: " + success_message);
-    transcript_.SetText([&] { std::ostringstream s; for (std::size_t i = 0; i < transcript_lines_.size(); ++i) { if (i) s << "\r\n\r\n"; s << transcript_lines_[i]; } return s.str(); }());
+    RefreshTranscriptText();
 }
 
 }  // namespace life_orchestrator::ui::assistant_shell

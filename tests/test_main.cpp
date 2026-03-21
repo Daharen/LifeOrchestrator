@@ -5,6 +5,7 @@
 #include "app/app_support/artifact_presentation_registry.hpp"
 #include "app/application_bootstrap.hpp"
 #include "app/provider_setup/provider_setup_service.h"
+#include "ui/provider_setup/provider_setup_controller.h"
 #include "ui/artifact_panels/artifact_panels_registry.hpp"
 #include "ui/assistant_shell/assistant_shell_composer_input.h"
 #include "integration/inference/inference_transport_client.h"
@@ -1418,6 +1419,30 @@ void test_provider_validation_paths_and_setup_service() {
     assert_true(!providers.empty(), "provider setup service should list configured providers");
 }
 
+void test_provider_setup_controller_round_trip() {
+    namespace setup = life_orchestrator::app::provider_setup;
+    namespace ui_setup = life_orchestrator::ui::provider_setup;
+    const std::filesystem::path root = "artifacts/provider_setup_controller_round_trip";
+    std::filesystem::remove_all(root);
+
+    auto service = std::make_shared<setup::ProviderSetupService>(root, std::filesystem::current_path(), "");
+    ui_setup::ProviderSetupController controller(service);
+
+    const auto save_result = controller.SaveProvider({"stub", "Stub Provider", "gpt-5", "direct", "TEST_KEY_123", "", "", false});
+    assert_true(save_result.exit_code == 0, "provider setup controller should save via service pass-through");
+    assert_true(save_result.standard_output.find("provider_name=stub") != std::string::npos, "controller save should preserve authoritative stdout");
+
+    const auto providers = controller.ListProviders();
+    assert_true(providers.size() == 1, "controller list should surface saved providers");
+    assert_true(providers.front().provider_name == "stub", "controller list should preserve provider names");
+    assert_true(!providers.front().enabled, "controller list should preserve enabled state");
+    assert_true(providers.front().redacted_secret_status.find("***") != std::string::npos, "controller list should preserve redacted secret status");
+
+    const auto test_result = controller.TestProvider("stub");
+    assert_true(test_result.ok, "controller test should call provider readiness path");
+    assert_true(test_result.safe_details.find("structured_result_returned=true") != std::string::npos, "controller test should preserve safe readiness details");
+}
+
 void test_composer_input_and_attachment_persistence() {
     namespace shell = life_orchestrator::app::assistant_shell;
     using life_orchestrator::ui::assistant_shell::AssistantShellComposerInput;
@@ -1484,6 +1509,7 @@ int main() {
         test_assistant_shell_session_persistence_and_reload();
         test_inference_transport_contracts_and_redaction();
         test_provider_validation_paths_and_setup_service();
+        test_provider_setup_controller_round_trip();
         test_composer_input_and_attachment_persistence();
     } catch (const std::exception& e) {
         std::cerr << "Test failure: " << e.what() << '\n';
