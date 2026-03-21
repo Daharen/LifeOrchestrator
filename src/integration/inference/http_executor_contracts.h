@@ -2,6 +2,7 @@
 
 #include <map>
 #include <memory>
+#include <optional>
 #include <string>
 
 namespace life_orchestrator::integration::inference {
@@ -15,13 +16,15 @@ struct HttpRequestSpec {
 };
 
 struct HttpResponseSpec {
-    int http_status = 0;
+    std::optional<int> http_status;
     std::map<std::string, std::string> headers;
     std::string body;
     std::string transport_error_text;
     bool success = false;
     bool network_success = false;
     std::string failure_stage;
+    std::optional<unsigned long> win32_error_code;
+    std::string win32_error_message;
     std::string response_content_type;
     std::string response_request_id;
     std::string safe_error_summary;

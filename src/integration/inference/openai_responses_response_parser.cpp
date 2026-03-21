@@ -46,11 +46,13 @@ std::optional<InferenceTransportError> parse_openai_error(const std::string& res
 
     return InferenceTransportError{failure_class,
                                    message,
-                                   http_status,
+                                   std::optional<int>{http_status},
                                    retryable,
                                    http_status > 0,
                                    http_status > 0 ? "receive_response" : std::string{},
                                    request_id,
+                                   std::nullopt,
+                                   {},
                                    "application/json",
                                    sanitize_diagnostic_text(summary),
                                    sanitize_diagnostic_text(body_preview.empty() ? response_body : body_preview)};
@@ -115,7 +117,7 @@ OpenAIResponseParseResult parse_openai_response_body(const std::string& response
                 failure_class = "rate_limited";
                 retryable = true;
             } else if (http_status >= 500) failure_class = "server_error";
-            result.error = InferenceTransportError{failure_class, "provider returned non-success status", http_status, retryable, http_status > 0, http_status > 0 ? "receive_response" : std::string{}, request_id, {}, {}, sanitize_diagnostic_text(body_preview.empty() ? response_body : body_preview)};
+            result.error = InferenceTransportError{failure_class, "provider returned non-success status", std::optional<int>{http_status}, retryable, http_status > 0, http_status > 0 ? "receive_response" : std::string{}, request_id, std::nullopt, {}, {}, {}, sanitize_diagnostic_text(body_preview.empty() ? response_body : body_preview)};
         }
         return result;
     }
@@ -126,11 +128,13 @@ OpenAIResponseParseResult parse_openai_response_body(const std::string& response
         result.error = InferenceTransportError{"schema_parse_failure",
                                                json_like ? "successful HTTP response did not match expected OpenAI structured response schema"
                                                          : "successful HTTP response body was not parseable JSON",
-                                               http_status,
+                                               std::optional<int>{http_status},
                                                false,
                                                true,
                                                "read_body",
                                                request_id,
+                                               std::nullopt,
+                                               {},
                                                "application/json",
                                                json_like ? "2xx response missing expected structured content" : "2xx response was non-JSON or malformed",
                                                sanitize_diagnostic_text(body_preview.empty() ? response_body : body_preview)};

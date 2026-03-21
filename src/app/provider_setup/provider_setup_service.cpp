@@ -62,7 +62,21 @@ ProviderSetupTestResult ProviderSetupService::TestProvider(const std::string& pr
         summary = attempted == "true" ? "Provider test succeeded with a real outbound request via " + transport + "." : "Provider test succeeded without an outbound request.";
     }
     if (summary == "unsupported_provider") summary = "Configured provider is unsupported for live inference in this sprint.";
-    return {result.exit_code == 0, summary, details};
+
+    if (result.exit_code != 0) {
+        std::ostringstream formatted;
+        formatted << "failed\n"
+                  << "failure_class=" << value_for_key(details, "failure_class") << '\n'
+                  << "failure_stage=" << value_for_key(details, "failure_stage") << '\n'
+                  << "win32_error_code=" << value_for_key(details, "win32_error_code") << '\n'
+                  << "win32_error_message=" << value_for_key(details, "win32_error_message") << '\n'
+                  << "http_status=" << value_for_key(details, "http_status") << '\n'
+                  << "request_id=" << value_for_key(details, "request_id") << '\n'
+                  << "outbound_request_attempted=" << value_for_key(details, "outbound_request_attempted") << '\n'
+                  << "response_preview=" << value_for_key(details, "response_preview") << '\n';
+        return {false, formatted.str(), details};
+    }
+    return {true, summary, details};
 }
 
 }  // namespace life_orchestrator::app::provider_setup
