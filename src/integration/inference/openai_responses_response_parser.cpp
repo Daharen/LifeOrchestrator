@@ -13,6 +13,27 @@ std::string trim_quotes(std::string value) {
     return value;
 }
 
+std::optional<std::string> extract_balanced_raw_local(const std::string& json, std::size_t start) {
+    if (start >= json.size()) return std::nullopt;
+    if (json[start] != '{' && json[start] != '[') return std::nullopt;
+
+    const char open = json[start];
+    const char close = open == '{' ? '}' : ']';
+    int depth = 0;
+    bool in_string = false;
+    for (std::size_t i = start; i < json.size(); ++i) {
+        const auto ch = json[i];
+        if (ch == '"' && (i == 0 || json[i - 1] != '\\')) in_string = !in_string;
+        if (in_string) continue;
+        if (ch == open) ++depth;
+        if (ch == close) {
+            --depth;
+            if (depth == 0) return json.substr(start, i - start + 1);
+        }
+    }
+    return std::nullopt;
+}
+
 std::string scalar_field(const std::string& json, const std::string& key, const std::string& fallback = {}) {
     if (const auto string_value = json_extract_string_field(json, key); string_value.has_value()) return *string_value;
     if (const auto raw_value = json_extract_raw_field(json, key); raw_value.has_value()) return trim_quotes(*raw_value);
@@ -133,6 +154,32 @@ std::string normalize_closest_commands(const std::string& structured_json) {
     return {};
 }
 
+std::optional<std::string> find_matching_array_item(const std::string& raw_array, std::size_t& cursor) {
+    while (cursor < raw_array.size()) {
+        const auto item_start = raw_array.find('{', cursor);
+        if (item_start == std::string::npos) return std::nullopt;
+        const auto item_raw = extract_balanced_raw_local(raw_array, item_start);
+        if (!item_raw.has_value()) return std::nullopt;
+        cursor = item_start + item_raw->size();
+        return item_raw;
+    }
+    return std::nullopt;
+}
+
+std::optional<std::string> extract_output_text_from_message(const std::string& message_json) {
+    const auto content_raw = json_extract_raw_field(message_json, "content");
+    if (!content_raw.has_value() || content_raw->size() < 2 || content_raw->front() != '[' || content_raw->back() != ']') return std::nullopt;
+
+    std::size_t cursor = 0;
+    while (const auto content_item = find_matching_array_item(*content_raw, cursor)) {
+        if (scalar_field(*content_item, "type") != "output_text") continue;
+        if (const auto text = json_extract_string_field(*content_item, "text"); text.has_value()) return text;
+        const auto text_raw = json_extract_raw_field(*content_item, "text");
+        if (text_raw.has_value()) return trim_quotes(*text_raw);
+    }
+    return std::nullopt;
+}
+
 std::optional<InferenceTransportError> parse_openai_error(const std::string& response_body,
                                                           int http_status,
                                                           const std::string& request_id,
@@ -183,28 +230,34 @@ InferenceTransportUsage parse_openai_usage(const std::string& response_body) {
     return usage;
 }
 
-std::optional<std::string> parse_openai_structured_output_to_key_value(const std::string& response_body) {
-    std::string structured_json;
-    if (const auto direct = json_extract_raw_field(response_body, "mode"); direct.has_value()) {
-        structured_json = response_body;
-    } else if (const auto text_value = json_extract_string_field(response_body, "text"); text_value.has_value()) {
-        structured_json = *text_value;
-    } else if (const auto output_text = json_extract_string_field(response_body, "output_text"); output_text.has_value()) {
-        structured_json = *output_text;
-    } else {
-        return std::nullopt;
-    }
+std::optional<std::string> extract_openai_output_text_payload(const std::string& response_body) {
+    const auto output_raw = json_extract_raw_field(response_body, "output");
+    if (!output_raw.has_value() || output_raw->size() < 2 || output_raw->front() != '[' || output_raw->back() != ']') return std::nullopt;
 
-    const auto raw_mode = scalar_field(structured_json, "mode");
+    std::size_t cursor = 0;
+    while (const auto output_item = find_matching_array_item(*output_raw, cursor)) {
+        const auto role = scalar_field(*output_item, "role");
+        const auto type = scalar_field(*output_item, "type");
+        if (role != "assistant" || type != "message") continue;
+        if (const auto text = extract_output_text_from_message(*output_item); text.has_value()) return text;
+    }
+    return std::nullopt;
+}
+
+std::optional<std::string> parse_openai_structured_output_to_key_value(const std::string& response_body) {
+    const auto structured_json = extract_openai_output_text_payload(response_body);
+    if (!structured_json.has_value()) return std::nullopt;
+
+    const auto raw_mode = scalar_field(*structured_json, "mode");
     const auto mode = normalize_mode(raw_mode);
-    const auto raw_matched_command = scalar_field(structured_json, "matched_command");
+    const auto raw_matched_command = scalar_field(*structured_json, "matched_command");
     const auto matched_command = normalize_command_alias(raw_matched_command);
-    const auto args = normalize_args(structured_json, matched_command);
-    const auto confidence = normalize_confidence(scalar_field(structured_json, "confidence", "0"));
-    const auto reasoning_summary = scalar_field(structured_json, "reasoning_summary");
-    const auto requires_confirmation = normalize_bool_like(scalar_field(structured_json, "requires_confirmation", "false"));
-    const auto closest_commands = normalize_closest_commands(structured_json);
-    const auto user_facing_message = scalar_field(structured_json, "user_facing_message");
+    const auto args = normalize_args(*structured_json, matched_command);
+    const auto confidence = normalize_confidence(scalar_field(*structured_json, "confidence", "0"));
+    const auto reasoning_summary = scalar_field(*structured_json, "reasoning_summary");
+    const auto requires_confirmation = normalize_bool_like(scalar_field(*structured_json, "requires_confirmation", "false"));
+    const auto closest_commands = normalize_closest_commands(*structured_json);
+    const auto user_facing_message = scalar_field(*structured_json, "user_facing_message");
     if (mode.empty() && matched_command.empty() && user_facing_message.empty()) return std::nullopt;
 
     std::ostringstream out;
