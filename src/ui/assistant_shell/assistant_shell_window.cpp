@@ -3,6 +3,9 @@
 #ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
 #endif
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
 #include <windows.h>
 
 #include <shellapi.h>
@@ -59,6 +62,10 @@ std::string get_window_text_utf8(HWND handle) {
 
 void append_menu_item(HMENU menu, UINT id, const wchar_t* title) {
     AppendMenuW(menu, MF_STRING, id, title);
+}
+
+HMENU control_menu_id(int id) {
+    return reinterpret_cast<HMENU>(static_cast<INT_PTR>(id));
 }
 }
 
@@ -166,13 +173,13 @@ void AssistantShellWindow::CreateUi() {
     status_.Attach(hwnd_, instance_);
     tool_panel_.Attach(hwnd_, instance_);
 
-    title_label_ = CreateWindowExW(0, L"STATIC", L"Life Orchestrator Assistant Shell", WS_CHILD | WS_VISIBLE, 0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kControlTitle), instance_, nullptr);
-    composer_edit_ = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", L"", WS_CHILD | WS_VISIBLE | ES_MULTILINE | ES_AUTOVSCROLL | WS_VSCROLL, 0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kControlComposer), instance_, nullptr);
-    submit_button_ = CreateWindowExW(0, L"BUTTON", L"Submit", WS_CHILD | WS_VISIBLE | BS_DEFPUSHBUTTON, 0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kControlSubmit), instance_, nullptr);
-    attach_button_ = CreateWindowExW(0, L"BUTTON", L"Attach", WS_CHILD | WS_VISIBLE, 0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kControlAttach), instance_, nullptr);
-    toggle_panel_button_ = CreateWindowExW(0, L"BUTTON", L"Hide Panel", WS_CHILD | WS_VISIBLE, 0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kControlTogglePanel), instance_, nullptr);
-    confirm_accept_button_ = CreateWindowExW(0, L"BUTTON", L"Confirm", WS_CHILD, 0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kControlConfirmAccept), instance_, nullptr);
-    confirm_decline_button_ = CreateWindowExW(0, L"BUTTON", L"Cancel", WS_CHILD, 0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(kControlConfirmDecline), instance_, nullptr);
+    title_label_ = CreateWindowExW(0, L"STATIC", L"Life Orchestrator Assistant Shell", WS_CHILD | WS_VISIBLE, 0, 0, 0, 0, hwnd_, control_menu_id(kControlTitle), instance_, nullptr);
+    composer_edit_ = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", L"", WS_CHILD | WS_VISIBLE | ES_MULTILINE | ES_AUTOVSCROLL | WS_VSCROLL, 0, 0, 0, 0, hwnd_, control_menu_id(kControlComposer), instance_, nullptr);
+    submit_button_ = CreateWindowExW(0, L"BUTTON", L"Submit", WS_CHILD | WS_VISIBLE | BS_DEFPUSHBUTTON, 0, 0, 0, 0, hwnd_, control_menu_id(kControlSubmit), instance_, nullptr);
+    attach_button_ = CreateWindowExW(0, L"BUTTON", L"Attach", WS_CHILD | WS_VISIBLE, 0, 0, 0, 0, hwnd_, control_menu_id(kControlAttach), instance_, nullptr);
+    toggle_panel_button_ = CreateWindowExW(0, L"BUTTON", L"Hide Panel", WS_CHILD | WS_VISIBLE, 0, 0, 0, 0, hwnd_, control_menu_id(kControlTogglePanel), instance_, nullptr);
+    confirm_accept_button_ = CreateWindowExW(0, L"BUTTON", L"Confirm", WS_CHILD, 0, 0, 0, 0, hwnd_, control_menu_id(kControlConfirmAccept), instance_, nullptr);
+    confirm_decline_button_ = CreateWindowExW(0, L"BUTTON", L"Cancel", WS_CHILD, 0, 0, 0, 0, hwnd_, control_menu_id(kControlConfirmDecline), instance_, nullptr);
 
     SendMessageW(composer_edit_, EM_SETLIMITTEXT, 8000, 0);
     Layout();
@@ -207,19 +214,19 @@ void AssistantShellWindow::Layout() {
     const int main_width = width - (margin * 2) - (tool_panel_visible_ ? side_width + gutter : 0);
     const int transcript_top = margin + title_height + 8;
     const int transcript_bottom = height - margin - status_height - gutter - composer_height - gutter - confirmation_height - gutter;
-    const int transcript_height = std::max(180, transcript_bottom - transcript_top);
+    const int transcript_height = (std::max)(180, transcript_bottom - transcript_top);
     const int main_left = margin;
     const int side_left = main_left + main_width + gutter;
 
-    MoveWindow(title_label_, main_left, margin, std::max(240, main_width - 120), title_height, TRUE);
-    MoveWindow(toggle_panel_button_, main_left + std::max(240, main_width - 120), margin - 2, 108, 28, TRUE);
+    MoveWindow(title_label_, main_left, margin, (std::max)(240, main_width - 120), title_height, TRUE);
+    MoveWindow(toggle_panel_button_, main_left + (std::max)(240, main_width - 120), margin - 2, 108, 28, TRUE);
     MoveWindow(transcript_.handle(), main_left, transcript_top, main_width, transcript_height, TRUE);
-    MoveWindow(confirmation_.handle(), main_left, transcript_top + transcript_height + gutter, std::max(300, main_width - (button_width * 2) - 12), confirmation_height, TRUE);
-    MoveWindow(confirm_accept_button_, main_left + std::max(300, main_width - (button_width * 2) - 12) + 6, transcript_top + transcript_height + gutter, button_width, confirmation_height, TRUE);
-    MoveWindow(confirm_decline_button_, main_left + std::max(300, main_width - (button_width * 2) - 12) + 6 + button_width + 6, transcript_top + transcript_height + gutter, button_width, confirmation_height, TRUE);
-    MoveWindow(composer_edit_, main_left, height - margin - status_height - gutter - composer_height, std::max(320, main_width - (button_width * 2) - 12), composer_height, TRUE);
-    MoveWindow(submit_button_, main_left + std::max(320, main_width - (button_width * 2) - 12) + 6, height - margin - status_height - gutter - composer_height, button_width, 32, TRUE);
-    MoveWindow(attach_button_, main_left + std::max(320, main_width - (button_width * 2) - 12) + 6, height - margin - status_height - gutter - composer_height + 38, button_width, 32, TRUE);
+    MoveWindow(confirmation_.handle(), main_left, transcript_top + transcript_height + gutter, (std::max)(300, main_width - (button_width * 2) - 12), confirmation_height, TRUE);
+    MoveWindow(confirm_accept_button_, main_left + (std::max)(300, main_width - (button_width * 2) - 12) + 6, transcript_top + transcript_height + gutter, button_width, confirmation_height, TRUE);
+    MoveWindow(confirm_decline_button_, main_left + (std::max)(300, main_width - (button_width * 2) - 12) + 6 + button_width + 6, transcript_top + transcript_height + gutter, button_width, confirmation_height, TRUE);
+    MoveWindow(composer_edit_, main_left, height - margin - status_height - gutter - composer_height, (std::max)(320, main_width - (button_width * 2) - 12), composer_height, TRUE);
+    MoveWindow(submit_button_, main_left + (std::max)(320, main_width - (button_width * 2) - 12) + 6, height - margin - status_height - gutter - composer_height, button_width, 32, TRUE);
+    MoveWindow(attach_button_, main_left + (std::max)(320, main_width - (button_width * 2) - 12) + 6, height - margin - status_height - gutter - composer_height + 38, button_width, 32, TRUE);
     MoveWindow(status_.handle(), main_left, height - margin - status_height, width - (margin * 2), status_height, TRUE);
 
     tool_panel_.SetVisible(tool_panel_visible_);
