@@ -141,6 +141,7 @@ AssistantShellMessage make_failure_message(const std::string& message_id,
     exec_summary.confidence = 0.0;
     exec_summary.confirmation_required = false;
     exec_summary.explanation = sanitize_shell_field(explanation);
+    exec_summary.route_rejection_reason = sanitize_shell_field(failure_classification, 64);
     return {message_id,
             "assistant",
             {{AssistantShellMessageBlockType::AssistantResponse, sanitize_shell_field(assistant_text, 320), false, std::nullopt, std::nullopt, std::nullopt},
@@ -456,19 +457,26 @@ AssistantShellSubmissionResult AssistantShellSurfaceService::SubmitUserText(cons
             std::string failure_classification = sanitize_shell_field(value_for_key(combined, "operator_query_failure_class"), 96);
             if (exec_summary.provider_used && exec_summary.selected_route.empty()) failure_classification = "provider_output_incomplete";
 
-            const auto confidence_text = value_for_key(combined, "confidence");
+            exec_summary.normalized_mode = sanitize_shell_field(value_for_key(combined, "normalized_mode"), 48);
+            exec_summary.normalized_matched_command = sanitize_shell_field(value_for_key(combined, "normalized_matched_command"), 96);
+            exec_summary.route_acceptance_result = sanitize_shell_field(value_for_key(combined, "route_acceptance_result"), 96);
+            exec_summary.route_rejection_reason = sanitize_shell_field(value_for_key(combined, "route_rejection_reason"), 96);
+
+            const auto confidence_text = value_for_key(combined, "normalized_confidence");
             if (exec_summary.provider_used && !try_parse_confidence(confidence_text, exec_summary.confidence)) {
                 if (failure_classification.empty()) failure_classification = "provider_output_invalid";
             } else if (!exec_summary.provider_used) {
                 exec_summary.confidence = 1.0;
             }
 
-            const auto requires_confirmation_text = value_for_key(combined, "requires_confirmation");
+            const auto requires_confirmation_text = value_for_key(combined, "normalized_requires_confirmation");
             if (exec_summary.provider_used && !try_parse_bool(requires_confirmation_text, exec_summary.confirmation_required) && !requires_confirmation_text.empty()) {
                 if (failure_classification.empty()) failure_classification = "provider_output_invalid";
             }
 
-            exec_summary.explanation = exec_summary.provider_used ? sanitize_shell_field(value_for_key(combined, "reasoning_summary")) : "The shell matched an exact command or alias through the authoritative helper surface first.";
+            exec_summary.explanation = exec_summary.provider_used
+                                           ? sanitize_shell_field("mode=" + exec_summary.normalized_mode + "; command=" + exec_summary.normalized_matched_command + "; acceptance=" + exec_summary.route_acceptance_result + (exec_summary.route_rejection_reason.empty() ? std::string{} : "; rejection=" + exec_summary.route_rejection_reason), 240)
+                                           : "The shell matched an exact command or alias through the authoritative helper surface first.";
             if (exec_summary.provider_used && exec_summary.explanation.empty()) exec_summary.explanation = "Provider output omitted a reasoning summary.";
 
             auto closest_commands = parse_closest_commands(value_for_key(combined, "closest_commands"));
