@@ -5,6 +5,7 @@
 #include "app/app_support/intent_routing_contract.hpp"
 #include "app/application_bootstrap.hpp"
 #include "integration/inference/inference_transport_client.h"
+#include "integration/inference/openai_responses_request_builder.h"
 #include "coordination/scheduling_engine.hpp"
 
 #include <algorithm>
@@ -352,7 +353,7 @@ bool is_allowed_command_option(ApplicationRunMode mode, const std::string& key) 
     }
     if (mode == ApplicationRunMode::BehavioralListInterventions) return key == "status" || key == "due-by" || key == "now";
     if (mode == ApplicationRunMode::BehavioralReevaluateBacklog) return key == "now" || key == "help";
-    if (mode == ApplicationRunMode::IntegrationSetProvider) return key == "provider-name" || key == "api-key" || key == "model-name" || key == "secret-source" || key == "env-var" || key == "secret-ref" || key == "display-name" || key == "enabled";
+    if (mode == ApplicationRunMode::IntegrationSetProvider) return key == "provider-name" || key == "api-key" || key == "model-name" || key == "endpoint-url" || key == "secret-source" || key == "env-var" || key == "secret-ref" || key == "display-name" || key == "enabled";
     if (mode == ApplicationRunMode::IntegrationShowProvider) return key == "provider-name";
     if (mode == ApplicationRunMode::IntegrationTestProvider) return key == "provider-name";
     if (mode == ApplicationRunMode::ArtifactQuery) return key == "artifact-type" || key == "limit";
@@ -400,6 +401,7 @@ std::string normalize_command_option_key(const std::string& key) {
     if (key == "model-name") return "model_name";
     if (key == "display-name") return "display_name";
     if (key == "enabled") return "enabled";
+    if (key == "endpoint-url") return "endpoint_url";
     if (key == "secret-source") return "secret_source";
     if (key == "env-var") return "env_var_name";
     if (key == "secret-ref") return "existing_secret_reference";
@@ -1402,6 +1404,11 @@ ApplicationExitCode execute_command(ApplicationRuntime& runtime,
             auto redacted_secret = std::string{"unset"};
             auto non_secret_settings = core::StringMap{{"model_name", sanitize_for_storage(runtime.config.command_parameters.at("model_name"))},
                                                        {"secret_source", secret_source}};
+            if (runtime.config.command_parameters.contains("endpoint_url") && !runtime.config.command_parameters.at("endpoint_url").empty()) {
+                non_secret_settings["endpoint_url"] = runtime.config.command_parameters.at("endpoint_url");
+            } else if (life_orchestrator::integration::inference::is_openai_like_provider_name(provider_name)) {
+                non_secret_settings["endpoint_url"] = life_orchestrator::integration::inference::default_openai_responses_endpoint();
+            }
             if (secret_source == "env") {
                 credential_storage_mode = core::CredentialStorageMode::InlinePlaceholderOnly;
                 credential_reference = sanitize_for_storage(runtime.config.command_parameters.at("env_var_name"));

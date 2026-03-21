@@ -2,6 +2,8 @@
 
 #include <sstream>
 
+#include "integration/inference/openai_responses_request_builder.h"
+
 namespace life_orchestrator::app::provider_setup {
 namespace {
 std::string value_for_key(const std::string& text, const std::string& key) {
@@ -40,6 +42,7 @@ std::vector<ProviderSetupProviderSummary> ProviderSetupService::ListProviders() 
 
 ApplicationInvocationResult ProviderSetupService::SaveProvider(const ProviderSetupUpsertRequest& request) const {
     std::vector<std::string> args{"integration-set-provider", "--data-root=" + data_root_.string(), "--quiet-startup", "--provider-name", request.provider_name, "--model-name", request.model_name, "--secret-source", request.secret_source};
+    if (life_orchestrator::integration::inference::is_openai_like_provider_name(request.provider_name)) args.insert(args.end(), {"--endpoint-url", life_orchestrator::integration::inference::default_openai_responses_endpoint()});
     if (!request.display_name.empty()) args.insert(args.end(), {"--display-name", request.display_name});
     args.insert(args.end(), {"--enabled", request.enabled ? "true" : "false"});
     if (request.secret_source == "env") args.insert(args.end(), {"--env-var", request.env_var_name});
@@ -50,7 +53,15 @@ ApplicationInvocationResult ProviderSetupService::SaveProvider(const ProviderSet
 
 ProviderSetupTestResult ProviderSetupService::TestProvider(const std::string& provider_name) const {
     auto result = invoke_application_command({"integration-test-provider", "--data-root=" + data_root_.string(), "--quiet-startup", "--provider-name", provider_name}, environment_data_root_, working_root_);
-    return {result.exit_code == 0, value_for_key(result.standard_output + "\n" + result.standard_error, "message"), result.standard_output + result.standard_error};
+    const auto details = result.standard_output + result.standard_error;
+    auto summary = value_for_key(details, "message");
+    if (summary.empty() && result.exit_code == 0) {
+        const auto attempted = value_for_key(details, "outbound_request_attempted");
+        const auto transport = value_for_key(details, "transport");
+        summary = attempted == "true" ? "Provider test succeeded with a real outbound request via " + transport + "." : "Provider test succeeded without an outbound request.";
+    }
+    if (summary == "unsupported_provider") summary = "Configured provider is unsupported for live inference in this sprint.";
+    return {result.exit_code == 0, summary, details};
 }
 
 }  // namespace life_orchestrator::app::provider_setup
