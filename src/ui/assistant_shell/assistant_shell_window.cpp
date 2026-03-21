@@ -1,5 +1,7 @@
 #include "ui/assistant_shell/assistant_shell_window.h"
 #ifdef _WIN32
+#include "ui/assistant_shell/assistant_shell_composer_input.h"
+#include "ui/assistant_shell/assistant_shell_composer_input.h"
 #ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
 #endif
@@ -145,7 +147,8 @@ LRESULT AssistantShellWindow::HandleMessage(UINT message, WPARAM w_param, LPARAM
             return 0;
         }
         case WM_KEYDOWN:
-            if (GetFocus() == composer_edit_ && w_param == VK_RETURN && (GetKeyState(VK_SHIFT) & 0x8000) == 0) {
+            if (GetFocus() == composer_edit_ && w_param == VK_RETURN &&
+                AssistantShellComposerInput::ResolveEnterKey((GetKeyState(VK_SHIFT) & 0x8000) != 0) == ComposerSubmitAction::Submit) {
                 SubmitComposer();
                 return 0;
             }
@@ -287,7 +290,7 @@ void AssistantShellWindow::UpdateConfirmationSurface() {
 
 void AssistantShellWindow::SubmitComposer() {
     const auto text = get_window_text_utf8(composer_edit_);
-    if (text.empty() || text == composer_placeholder_) return;
+    if (!AssistantShellComposerInput::CanSubmit(text) || text == composer_placeholder_) return;
     const auto result = controller_->SubmitUserText({session_id_, text});
     transcript_lines_.push_back("You: " + text);
     for (const auto& message : result.appended_messages) AppendMessage(message);
@@ -337,7 +340,9 @@ void AssistantShellWindow::OpenConsole() {
         ShowInfoDialog(L"Console", "The operator console executable was not found next to the assistant shell binary.");
         return;
     }
-    std::wstring command = L"cmd.exe /K \"\"" + app_path + L"\" operator-console\"";
+    std::wstring shell = L"powershell.exe";
+    if (GetFileAttributesW(L"C:\\Program Files\\PowerShell\\7\\pwsh.exe") != INVALID_FILE_ATTRIBUTES) shell = L"C:\\Program Files\\PowerShell\\7\\pwsh.exe";
+    std::wstring command = L"\"" + shell + L"\" -NoExit -Command \"& '" + app_path + L"' operator-console\"";
     STARTUPINFOW startup{};
     startup.cb = sizeof(startup);
     PROCESS_INFORMATION process{};
@@ -354,7 +359,7 @@ void AssistantShellWindow::OpenConsole() {
 }
 
 void AssistantShellWindow::OpenProviderConfiguration() {
-    OpenSiblingExecutable(L"life_orchestrator_admin_gui.exe", L"API Keys", "Opened the provider configuration surface through the Developer Layer window.");
+    OpenSiblingExecutable(L"life_orchestrator_admin_gui.exe", L"API Keys", "Opened the provider configuration surface.");
 }
 
 void AssistantShellWindow::ShowActiveModules() {

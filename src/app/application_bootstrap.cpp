@@ -4,6 +4,7 @@
 #include "app/app_support/intent_command_context.hpp"
 #include "app/app_support/intent_routing_contract.hpp"
 #include "app/application_bootstrap.hpp"
+#include "integration/inference/inference_transport_client.h"
 #include "coordination/scheduling_engine.hpp"
 
 #include <algorithm>
@@ -351,7 +352,7 @@ bool is_allowed_command_option(ApplicationRunMode mode, const std::string& key) 
     }
     if (mode == ApplicationRunMode::BehavioralListInterventions) return key == "status" || key == "due-by" || key == "now";
     if (mode == ApplicationRunMode::BehavioralReevaluateBacklog) return key == "now" || key == "help";
-    if (mode == ApplicationRunMode::IntegrationSetProvider) return key == "provider-name" || key == "api-key" || key == "model-name" || key == "secret-source" || key == "env-var" || key == "secret-ref";
+    if (mode == ApplicationRunMode::IntegrationSetProvider) return key == "provider-name" || key == "api-key" || key == "model-name" || key == "secret-source" || key == "env-var" || key == "secret-ref" || key == "display-name" || key == "enabled";
     if (mode == ApplicationRunMode::IntegrationShowProvider) return key == "provider-name";
     if (mode == ApplicationRunMode::IntegrationTestProvider) return key == "provider-name";
     if (mode == ApplicationRunMode::ArtifactQuery) return key == "artifact-type" || key == "limit";
@@ -397,6 +398,8 @@ std::string normalize_command_option_key(const std::string& key) {
     if (key == "provider-name") return "provider_name";
     if (key == "api-key") return "api_key";
     if (key == "model-name") return "model_name";
+    if (key == "display-name") return "display_name";
+    if (key == "enabled") return "enabled";
     if (key == "secret-source") return "secret_source";
     if (key == "env-var") return "env_var_name";
     if (key == "secret-ref") return "existing_secret_reference";
@@ -809,25 +812,19 @@ ApplicationExitCode execute_command(ApplicationRuntime& runtime,
                << "version=" << record.version << '\n';
     };
 
-    auto run_stubbed_provider_request = [&](const core::IntegrationConfigurationRecord& record, const std::string& input) -> std::pair<bool, std::string> {
+    integration::inference::InferenceTransportClient inference_client{};
+
+    auto run_provider_request = [&](const core::IntegrationConfigurationRecord& record, const std::string& input) -> std::pair<bool, std::string> {
         const auto [api_key, secret_reference] = provider_secret_status(record);
-        if (api_key.empty()) return {false, std::string{"provider_not_ready=missing_api_key source="} + secret_reference};
-        const auto model_name = record.non_secret_settings.contains("model_name") ? record.non_secret_settings.at("model_name") : std::string{"unset"};
-        if (starts_with(api_key, "TEST_") || starts_with(api_key, "TEST") || record.integration_id == "stub") {
-            const auto request_only = [&]() {
-                const auto marker = input.rfind("User request: ");
-                return marker == std::string::npos ? input : input.substr(marker + 14);
-            }();
-            const auto lowered_input = [&] { std::string out = request_only; std::transform(out.begin(), out.end(), out.begin(), [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); }); return out; }();
-            if (lowered_input.find("weekly") != std::string::npos && lowered_input.find("laundry") != std::string::npos) {
-                return {true, "mode=proposed\nmatched_command=procedural-upsert-activity\nargs=procedural-upsert-activity --activity-id activity.weekly-laundry --title WeeklyLaundry --domain-source home --frequency weekly --duration-minutes 60 --effort-estimate 4 --outcome-value 6\nconfidence=0.92\nreasoning_summary=Weekly laundry maps to the existing activity upsert flow with required activity fields filled from safe defaults.\nrequires_confirmation=false\nclosest_commands=procedural-upsert-activity,procedural-list-activities,status\nuser_facing_message=I mapped your request to procedural-upsert-activity and filled the required weekly laundry defaults.\n"};
-            }
-            if (lowered_input.find("provider") != std::string::npos || lowered_input.find("api key") != std::string::npos) {
-                return {true, "mode=proposed\nmatched_command=integration-set-provider\nargs=integration-set-provider --provider-name openai --api-key TEST_KEY_123 --model-name gpt-5\nconfidence=0.82\nreasoning_summary=This request changes provider configuration, which is a high-risk action that must be confirmed.\nrequires_confirmation=true\nclosest_commands=integration-set-provider,integration-test-provider,integration-list-providers\nuser_facing_message=I found a likely provider configuration update, but it requires confirmation before execution.\n"};
-            }
-            return {true, "mode=failure\nmatched_command=\nargs=\nconfidence=0.21\nreasoning_summary=No safe structured command mapping was found from the available command list.\nrequires_confirmation=false\nclosest_commands=" + (closest_command_names(input).empty() ? std::string{} : [&](){ auto c=closest_command_names(input); std::ostringstream s; for(size_t i=0;i<c.size();++i){ if(i) s<<","; s<<c[i]; } return s.str(); }()) + "\nuser_facing_message=I couldn't find a confident command match. Try one of the closest valid commands instead.\n"};
+        const auto result = inference_client.Interpret(record,
+                                                       api_key,
+                                                       "inference-" + core::current_timestamp_utc(),
+                                                       {{"system", "Return structured output only as newline-delimited key=value pairs."}, {"user", input}});
+        if (!result.ok) {
+            const auto failure = result.error.has_value() ? result.error->failure_class : std::string{"transport_failure"};
+            return {false, std::string{"provider_not_ready="} + failure + " source=" + secret_reference};
         }
-        return {false, "provider_not_ready=unsupported_live_transport"};
+        return {true, result.output_text};
     };
 
     auto resolve_operator_input = [&](const std::string& raw_input, std::ostream& routed_output, std::ostream& routed_error) -> ApplicationExitCode {
@@ -868,7 +865,7 @@ ApplicationExitCode execute_command(ApplicationRuntime& runtime,
                                                context,
                                                closest,
                                                [&](const std::string& prompt) {
-                                                   return run_stubbed_provider_request(provider, prompt + "\nUser request: " + input).second;
+                                                   return run_provider_request(provider, prompt + "\nUser request: " + input).second;
                                                });
         routed_output << "operator_query=llm_interpreter\n";
         routed_output << "provider_request_provider_name=" << provider.integration_id << '\n';
@@ -1424,8 +1421,8 @@ ApplicationExitCode execute_command(ApplicationRuntime& runtime,
             }
             core::IntegrationConfigurationRecord record{.integration_config_id = provider_config_id_for_name(provider_name),
                                                         .integration_id = provider_name,
-                                                        .display_name = provider_name,
-                                                        .enabled = true,
+                                                        .display_name = runtime.config.command_parameters.contains("display_name") && !runtime.config.command_parameters.at("display_name").empty() ? sanitize_for_storage(runtime.config.command_parameters.at("display_name")) : provider_name,
+                                                        .enabled = !runtime.config.command_parameters.contains("enabled") || runtime.config.command_parameters.at("enabled") != "false",
                                                         .status = core::IntegrationStatus::Enabled,
                                                         .capability_visibility = {"operator-query", "integration-test-provider"},
                                                         .connection_diagnostics = {},
@@ -1484,14 +1481,26 @@ ApplicationExitCode execute_command(ApplicationRuntime& runtime,
                 error << "integration_test_provider=failed\nmessage=provider_not_found\n";
                 return complete(ApplicationExitCode::RuntimeOperationFailure, "Provider not found.");
             }
-            auto [ok, response_text] = run_stubbed_provider_request(*record, "integration readiness check");
-            if (!ok) {
-                error << "integration_test_provider=failed\nmessage=" << response_text << '\n';
-                return complete(ApplicationExitCode::RuntimeOperationFailure, response_text);
+            const auto [api_key, secret_reference] = provider_secret_status(*record);
+            const auto health = inference_client.CheckProvider(*record, api_key, "provider-health-" + core::current_timestamp_utc());
+            if (!health.ok) {
+                error << "integration_test_provider=failed\n"
+                      << "message=" << (health.error.has_value() ? health.error->failure_class : std::string{"transport_failure"}) << '\n'
+                      << "provider_name=" << record->integration_id << '\n'
+                      << "secret_reference=" << secret_reference << '\n'
+                      << "metadata_loaded=" << (health.metadata_loaded ? "true" : "false") << '\n'
+                      << "secret_resolved=" << (health.secret_resolved ? "true" : "false") << '\n'
+                      << "outbound_request_attempted=" << (health.outbound_request_attempted ? "true" : "false") << '\n';
+                return complete(ApplicationExitCode::RuntimeOperationFailure, "Integration provider readiness failed.");
             }
-            output << "integration_test_provider=ok\nprovider_name=" << record->integration_id << '\n'
+            output << "integration_test_provider=ok\n"
+                   << "provider_name=" << record->integration_id << '\n'
                    << "model_name=" << default_if_empty(record->non_secret_settings.contains("model_name") ? record->non_secret_settings.at("model_name") : std::string{}, "unset") << '\n'
-                   << "ready=true\ntransport=stub\n";
+                   << "metadata_loaded=" << (health.metadata_loaded ? "true" : "false") << '\n'
+                   << "secret_resolved=" << (health.secret_resolved ? "true" : "false") << '\n'
+                   << "outbound_request_attempted=" << (health.outbound_request_attempted ? "true" : "false") << '\n'
+                   << "structured_result_returned=" << (health.inference_result.has_value() && health.inference_result->ok ? "true" : "false") << '\n'
+                   << "transport=" << health.transport_name << '\n';
             return complete(ApplicationExitCode::Success, "Integration provider readiness succeeded.");
         }
         case ApplicationRunMode::ArtifactQuery: {

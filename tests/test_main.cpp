@@ -4,7 +4,10 @@
 #include "app/app_support/action_result_view.hpp"
 #include "app/app_support/artifact_presentation_registry.hpp"
 #include "app/application_bootstrap.hpp"
+#include "app/provider_setup/provider_setup_service.h"
 #include "ui/artifact_panels/artifact_panels_registry.hpp"
+#include "ui/assistant_shell/assistant_shell_composer_input.h"
+#include "integration/inference/inference_transport_client.h"
 #include "control_plane/control_plane.hpp"
 #include "coordination/behavioral_triage_module.hpp"
 #include "coordination/scheduling_coordination_module.hpp"
@@ -1182,7 +1185,8 @@ void test_integration_set_provider_env_var_reference_mode() {
     std::ostringstream readiness_err;
     rc = life_orchestrator::app::run_application({"integration-test-provider", "--data-root=" + root.string(), "--quiet-startup", "--provider-name", "openai"}, readiness_out, readiness_err, "", std::filesystem::current_path());
     assert_true(rc == 0, "integration-test-provider should work with env-var-backed secrets");
-    assert_true(readiness_out.str().find("ready=true") != std::string::npos, "env-var-backed provider should be ready");
+    assert_true(readiness_out.str().find("secret_resolved=true") != std::string::npos, "env-var-backed provider should resolve its secret");
+    assert_true(readiness_out.str().find("structured_result_returned=true") != std::string::npos, "env-var-backed provider should return a structured health-check result");
 }
 
 
@@ -1229,7 +1233,7 @@ void test_operator_query_provider_and_status_visibility() {
     rc = life_orchestrator::app::run_application({"operator-query", "--data-root=" + provider_root.string(), "--quiet-startup", "--input", std::string("integration-test-provider ") + std::string("\xE2\x80\x94", 3) + "provider-name openai"}, dash_out, dash_err, "", std::filesystem::current_path());
     assert_true(rc == 0, "smart-dash integration command should normalize and execute");
     assert_true(dash_out.str().find("operator_input_normalized=integration-test-provider --provider-name openai") != std::string::npos, "operator-query should normalize smart dashes in assisted input");
-    assert_true(dash_out.str().find("ready=true") != std::string::npos, "normalized smart-dash command should execute readiness test");
+    assert_true(dash_out.str().find("structured_result_returned=true") != std::string::npos, "normalized smart-dash command should execute readiness test");
 
     std::ostringstream activity_out;
     std::ostringstream activity_err;
@@ -1262,7 +1266,7 @@ void test_operator_query_provider_and_status_visibility() {
     std::ostringstream readiness_err;
     rc = life_orchestrator::app::run_application({"integration-test-provider", "--data-root=" + provider_root.string(), "--quiet-startup", "--provider-name", "openai"}, readiness_out, readiness_err, "", std::filesystem::current_path());
     assert_true(rc == 0, "integration-test-provider should succeed for deterministic test provider");
-    assert_true(readiness_out.str().find("ready=true") != std::string::npos, "provider readiness should emit stable key-value output");
+    assert_true(readiness_out.str().find("structured_result_returned=true") != std::string::npos, "provider readiness should emit stable key-value output");
 
     std::ostringstream status_out;
     std::ostringstream status_err;
@@ -1369,6 +1373,75 @@ void test_assistant_shell_session_persistence_and_reload() {
     assert_true(status.has_value(), "reloaded session should preserve last known shell status snapshot");
 }
 
+void test_inference_transport_contracts_and_redaction() {
+    using namespace life_orchestrator::integration::inference;
+    assert_true(redact_secret("TEST_KEY_123") == "TE***23", "transport redaction should preserve only safe boundary characters");
+
+    const life_orchestrator::core::IntegrationConfigurationRecord record{
+        "provider.stub", "stub", "Stub", true, life_orchestrator::core::IntegrationStatus::Enabled, {}, {},
+        life_orchestrator::core::CredentialStorageMode::ExternalSecretReference, "config/providers/stub.secret",
+        {{"model_name", "gpt-5"}}, "2026-03-21T00:00:00.000Z", "2026-03-21T00:00:00.000Z", 1};
+    InferenceTransportClient client;
+    const auto result = client.Interpret(record, "TEST_KEY_123", "req-1", {{"user", "create a weekly laundry reminder"}});
+    assert_true(result.ok, "transport client should return structured output");
+    assert_true(result.output_text.find("matched_command=procedural-upsert-activity") != std::string::npos, "transport output should remain structured");
+}
+
+void test_provider_validation_paths_and_setup_service() {
+    namespace setup = life_orchestrator::app::provider_setup;
+    const std::filesystem::path root = "artifacts/provider_validation";
+    std::filesystem::remove_all(root);
+
+    std::ostringstream out;
+    std::ostringstream err;
+    auto rc = life_orchestrator::app::run_application({"integration-test-provider", "--data-root=" + root.string(), "--quiet-startup", "--provider-name", "missing"}, out, err, "", std::filesystem::current_path());
+    assert_true(rc != 0, "missing provider health check should fail");
+    assert_true(err.str().find("provider_not_found") != std::string::npos, "missing provider error should be structured");
+
+    rc = life_orchestrator::app::run_application({"integration-set-provider", "--data-root=" + root.string(), "--quiet-startup", "--provider-name", "openai", "--model-name", "gpt-5", "--secret-source", "env", "--env-var", "MISSING_ENV"}, out, err, "", std::filesystem::current_path());
+    assert_true(rc == 0, "provider metadata should persist without inline secret material");
+    out.str(""); out.clear(); err.str(""); err.clear();
+    rc = life_orchestrator::app::run_application({"integration-test-provider", "--data-root=" + root.string(), "--quiet-startup", "--provider-name", "openai"}, out, err, "", std::filesystem::current_path());
+    assert_true(rc != 0, "provider validation should fail when secret resolution fails");
+    assert_true(err.str().find("secret_resolved=false") != std::string::npos, "validation should expose secret-resolution failure safely");
+
+    out.str(""); out.clear(); err.str(""); err.clear();
+    rc = life_orchestrator::app::run_application({"integration-set-provider", "--data-root=" + root.string(), "--quiet-startup", "--provider-name", "stub", "--api-key", "TEST_KEY_123", "--model-name", "gpt-5", "--display-name", "Stub Provider"}, out, err, "", std::filesystem::current_path());
+    assert_true(rc == 0, "healthy provider should persist");
+    out.str(""); out.clear(); err.str(""); err.clear();
+    rc = life_orchestrator::app::run_application({"integration-test-provider", "--data-root=" + root.string(), "--quiet-startup", "--provider-name", "stub"}, out, err, "", std::filesystem::current_path());
+    assert_true(rc == 0, "healthy provider validation should succeed");
+    assert_true(out.str().find("structured_result_returned=true") != std::string::npos, "provider validation should confirm structured result");
+
+    setup::ProviderSetupService service(root, std::filesystem::current_path(), "");
+    const auto providers = service.ListProviders();
+    assert_true(!providers.empty(), "provider setup service should list configured providers");
+}
+
+void test_composer_input_and_attachment_persistence() {
+    namespace shell = life_orchestrator::app::assistant_shell;
+    using life_orchestrator::ui::assistant_shell::AssistantShellComposerInput;
+    using life_orchestrator::ui::assistant_shell::ComposerSubmitAction;
+
+    assert_true(AssistantShellComposerInput::CanSubmit("hello"), "composer should submit non-empty text");
+    assert_true(!AssistantShellComposerInput::CanSubmit("   \n\t"), "composer should reject trimmed-empty text");
+    assert_true(AssistantShellComposerInput::ResolveEnterKey(false) == ComposerSubmitAction::Submit, "enter should submit");
+    assert_true(AssistantShellComposerInput::ResolveEnterKey(true) == ComposerSubmitAction::InsertNewline, "shift+enter should insert newline");
+
+    const std::filesystem::path root = "artifacts/assistant_shell_attachments";
+    std::filesystem::remove_all(root);
+    shell::AssistantShellSurfaceService service(root, std::filesystem::current_path(), "");
+    service.StartOrResumeSession("session-attachments");
+    auto attachments = service.AddAttachment({"session-attachments", "C:/tmp/demo.txt", "demo.txt", "42"});
+    assert_true(attachments.attachments.size() == 1, "attachment add should persist shell metadata");
+    attachments = service.RemoveAttachment({"session-attachments", "C:/tmp/demo.txt"});
+    assert_true(attachments.attachments.empty(), "attachment remove should persist");
+    service.AddAttachment({"session-attachments", "C:/tmp/keep.txt", "keep.txt", "77"});
+    shell::AssistantShellSurfaceService reloaded(root, std::filesystem::current_path(), "");
+    const auto resumed = reloaded.StartOrResumeSession("session-attachments");
+    assert_true(resumed.pending_attachments.attachments.size() == 1, "session reload should preserve pending attachments");
+}
+
 }  // namespace
 
 int main() {
@@ -1409,6 +1482,9 @@ int main() {
         test_assistant_shell_confirmation_generation_and_acceptance();
         test_assistant_shell_no_provider_remediation_and_redaction();
         test_assistant_shell_session_persistence_and_reload();
+        test_inference_transport_contracts_and_redaction();
+        test_provider_validation_paths_and_setup_service();
+        test_composer_input_and_attachment_persistence();
     } catch (const std::exception& e) {
         std::cerr << "Test failure: " << e.what() << '\n';
         return 1;

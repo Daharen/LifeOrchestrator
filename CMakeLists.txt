@@ -18,6 +18,10 @@ target_include_directories(lifeorchestrator_core PUBLIC src)
 
 add_library(lifeorchestrator_integration
     src/integration/integration_configuration_repository.cpp
+    src/integration/inference/inference_transport_contracts.cpp
+    src/integration/inference/inference_transport_client.cpp
+    src/integration/inference/provider_http_transport.cpp
+    src/integration/inference/provider_transport_registry.cpp
 )
 target_include_directories(lifeorchestrator_integration PUBLIC src)
 target_link_libraries(lifeorchestrator_integration PUBLIC lifeorchestrator_core)
@@ -40,7 +44,10 @@ add_library(lifeorchestrator_app_support
     src/app/application_bootstrap.cpp
     src/app/assistant_shell/assistant_shell_surface_contracts.cpp
     src/app/assistant_shell/assistant_shell_surface_service.cpp
+    src/app/provider_setup/provider_setup_contracts.cpp
+    src/app/provider_setup/provider_setup_service.cpp
     src/intelligence/intent_router.cpp
+    src/ui/assistant_shell/assistant_shell_composer_input.cpp
     src/app/app_support/action_form_registry.cpp
     src/app/app_support/action_result_view.cpp
     src/app/app_support/artifact_presentation_registry.cpp
@@ -99,6 +106,9 @@ if(WIN32)
         src/ui/assistant_shell/assistant_shell_confirmation_surface.cpp
         src/ui/assistant_shell/assistant_shell_message_surface.cpp
         src/ui/assistant_shell/assistant_shell_status_bar.cpp
+        src/ui/provider_setup/provider_setup_window.cpp
+        src/ui/provider_setup/provider_setup_controller.cpp
+        src/ui/provider_setup/provider_setup_view_models.cpp
     )
     set_target_properties(life_orchestrator_assistant_shell PROPERTIES
         RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}"
