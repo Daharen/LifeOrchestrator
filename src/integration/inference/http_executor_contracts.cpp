@@ -57,7 +57,7 @@ public:
             } else {
                 payload = R"({"mode":"failure","matched_command":"","args":"","confidence":0.21,"reasoning_summary":"No safe structured command mapping was found from the available command list.","requires_confirmation":false,"closest_commands":"status,help,suggest","user_facing_message":"I couldn't find a confident command match. Try one of the closest valid commands instead."})";
             }
-            const auto response_body = std::string{"{\"output_text\":\""} + json_escape(payload) + "\",\"input_tokens\":12,\"output_tokens\":8,\"total_tokens\":20}";
+            const auto response_body = std::string{"{\"text\":{\"format\":{\"type\":\"json_schema\",\"schema\":{\"type\":\"object\",\"properties\":{\"mode\":{\"type\":\"string\"}}}}},\"output\":[{\"type\":\"message\",\"role\":\"assistant\",\"content\":[{\"type\":\"output_text\",\"text\":\""} + json_escape(payload) + "\"}]}],\"input_tokens\":12,\"output_tokens\":8,\"total_tokens\":20}";
             return {200, {}, response_body, {}, true, true, {}, std::nullopt, {}, "application/json", {}, {}, {}};
         }
         return {std::nullopt, {}, {}, "http executor is only implemented for Windows in this sprint", false, false, "open_session", std::nullopt, {}, {}, {}, "http executor unavailable on this platform", {}};

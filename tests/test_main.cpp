@@ -52,7 +52,7 @@ struct FakeHttpExecutor final : life_orchestrator::integration::inference::IHttp
     mutable std::vector<life_orchestrator::integration::inference::HttpRequestSpec> requests;
     life_orchestrator::integration::inference::HttpResponseSpec next_response = make_http_response(
         200,
-        R"({"output_text":"{\"mode\":\"proposed\",\"matched_command\":\"procedural-upsert-activity\",\"args\":\"procedural-upsert-activity --activity-id activity.weekly-laundry --title WeeklyLaundry --domain-source home --frequency weekly --duration-minutes 60 --effort-estimate 4 --outcome-value 6\",\"confidence\":0.92,\"reasoning_summary\":\"Weekly laundry maps cleanly.\",\"requires_confirmation\":false,\"closest_commands\":\"procedural-upsert-activity,status\",\"user_facing_message\":\"Mapped request safely.\"}","input_tokens":11,"output_tokens":7,"total_tokens":18})",
+        R"({"text":{"format":{"type":"json_schema","schema":{"type":"object","properties":{"mode":{"type":"string"}}}}},"output":[{"id":"msg_1","type":"message","role":"assistant","content":[{"type":"output_text","text":"{\"mode\":\"proposed\",\"matched_command\":\"procedural-upsert-activity\",\"args\":\"procedural-upsert-activity --activity-id activity.weekly-laundry --title WeeklyLaundry --domain-source home --frequency weekly --duration-minutes 60 --effort-estimate 4 --outcome-value 6\",\"confidence\":0.92,\"reasoning_summary\":\"Weekly laundry maps cleanly.\",\"requires_confirmation\":false,\"closest_commands\":\"procedural-upsert-activity,status\",\"user_facing_message\":\"Mapped request safely.\"}"}]}],"input_tokens":11,"output_tokens":7,"total_tokens":18})",
         {},
         true,
         true,
@@ -1582,15 +1582,15 @@ void test_inference_transport_contracts_and_redaction() {
     assert_true(fake->requests.back().body.find("mode must be exactly proposed or failure") != std::string::npos, "request builder should harden the mode contract");
     assert_true(fake->requests.back().body.find("Never emit values like invalid, clarification, question, informational, list, assist") != std::string::npos, "request builder should include negative mode instructions");
 
-    fake->next_response = make_http_response(200, R"({"output_text":"{\"mode\":\"command\",\"matched_command\":\"status\",\"args\":\"status\",\"confidence\":\"1.3\",\"reasoning_summary\":\"Healthy\",\"requires_confirmation\":\"no\",\"closest_commands\":[\"status\",\"help\"],\"user_facing_message\":\"Ready\"}","input_tokens":1,"output_tokens":1,"total_tokens":2})", {}, true, true, "read_body", std::nullopt, {}, "application/json", "req-variant");
+    fake->next_response = make_http_response(200, R"({"output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"{\"mode\":\"command\",\"matched_command\":\"status\",\"args\":\"status\",\"confidence\":\"1.3\",\"reasoning_summary\":\"Healthy\",\"requires_confirmation\":\"no\",\"closest_commands\":[\"status\",\"help\"],\"user_facing_message\":\"Ready\"}"}]}],"input_tokens":1,"output_tokens":1,"total_tokens":2})", {}, true, true, "read_body", std::nullopt, {}, "application/json", "req-variant");
     const auto variant = parse_openai_structured_output_to_key_value(fake->next_response.body);
     assert_true(variant.has_value() && variant->find("mode=failure") != std::string::npos && variant->find("raw_mode=command") != std::string::npos && variant->find("closest_commands=status,help") != std::string::npos && variant->find("requires_confirmation=false") != std::string::npos, "non-canonical proposal-like mode variants should degrade into canonical failure output");
 
-    fake->next_response = make_http_response(200, R"({"output_text":"{\"mode\":\"needs_clarification\",\"matched_command\":\"status\",\"args\":\"status\",\"confidence\":\"0.4\",\"reasoning_summary\":\"Need more detail\",\"requires_confirmation\":\"false\",\"closest_commands\":[\"help\",\"status\"],\"user_facing_message\":\"Please clarify.\"}","input_tokens":1,"output_tokens":1,"total_tokens":2})", {}, true, true, "read_body", std::nullopt, {}, "application/json", "req-needs-clarification");
+    fake->next_response = make_http_response(200, R"({"output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"{\"mode\":\"needs_clarification\",\"matched_command\":\"status\",\"args\":\"status\",\"confidence\":\"0.4\",\"reasoning_summary\":\"Need more detail\",\"requires_confirmation\":\"false\",\"closest_commands\":[\"help\",\"status\"],\"user_facing_message\":\"Please clarify.\"}"}]}],"input_tokens":1,"output_tokens":1,"total_tokens":2})", {}, true, true, "read_body", std::nullopt, {}, "application/json", "req-needs-clarification");
     const auto clarification = parse_openai_structured_output_to_key_value(fake->next_response.body);
     assert_true(clarification.has_value() && clarification->find("mode=failure") != std::string::npos && clarification->find("raw_mode=needs_clarification") != std::string::npos, "clarification-like provider modes should degrade to canonical failure");
 
-    fake->next_response = make_http_response(200, R"({"output_text":"{\"mode\":\"clarification\",\"matched_command\":\"\",\"args\":\"\",\"confidence\":\"0.2\",\"reasoning_summary\":\"Clarify\",\"requires_confirmation\":\"false\",\"closest_commands\":[\"help\"],\"user_facing_message\":\"Please clarify.\"}","input_tokens":1,"output_tokens":1,"total_tokens":2})", {}, true, true, "read_body", std::nullopt, {}, "application/json", "req-clarification");
+    fake->next_response = make_http_response(200, R"({"output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"{\"mode\":\"clarification\",\"matched_command\":\"\",\"args\":\"\",\"confidence\":\"0.2\",\"reasoning_summary\":\"Clarify\",\"requires_confirmation\":\"false\",\"closest_commands\":[\"help\"],\"user_facing_message\":\"Please clarify.\"}"}]}],"input_tokens":1,"output_tokens":1,"total_tokens":2})", {}, true, true, "read_body", std::nullopt, {}, "application/json", "req-clarification");
     const auto clarification_variant = parse_openai_structured_output_to_key_value(fake->next_response.body);
     assert_true(clarification_variant.has_value() && clarification_variant->find("mode=failure") != std::string::npos && clarification_variant->find("raw_mode=clarification") != std::string::npos, "clarification variants should degrade to canonical failure");
 }
@@ -1823,13 +1823,59 @@ void test_openai_transport_diagnostic_matrix() {
     assert_true(!result.ok && result.error.has_value() && result.error->failure_stage == "connect", "network failure should retain stage");
     assert_true(result.error->safe_body_preview.find("TEST_KEY_123") == std::string::npos, "network diagnostics should redact secrets");
 
-    fake->next_response = make_http_response(200, R"({"output_text":"{"mode":"proposed","matched_command":"status","args":"status","confidence":0.91,"reasoning_summary":"Healthy","requires_confirmation":false,"closest_commands":"status,help","user_facing_message":"Ready"}","input_tokens":1,"output_tokens":1,"total_tokens":2})", {}, true, true, "read_body", std::nullopt, {}, "application/json", "req-200");
+    fake->next_response = make_http_response(200, R"({"output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"{\"mode\":\"proposed\",\"matched_command\":\"status\",\"args\":\"status\",\"confidence\":0.91,\"reasoning_summary\":\"Healthy\",\"requires_confirmation\":false,\"closest_commands\":\"status,help\",\"user_facing_message\":\"Ready\"}"}]}],"input_tokens":1,"output_tokens":1,"total_tokens":2})", {}, true, true, "read_body", std::nullopt, {}, "application/json", "req-200");
     result = client.Interpret(record, "TEST_KEY_123", "req-200", {{"user", "test"}});
     assert_true(result.ok, "200 structured response should succeed");
 
     fake->next_response = make_http_response(200, "<html>nope</html>", {}, true, true, "read_body", std::nullopt, {}, "text/html", "req-malformed", "malformed body", "<html>nope</html>");
     result = client.Interpret(record, "TEST_KEY_123", "req-malformed", {{"user", "test"}});
     assert_true(!result.ok && result.error.has_value() && result.error->failure_class == "schema_parse_failure", "200 malformed body should map to schema_parse_failure");
+}
+
+
+void test_openai_response_parser_extracts_assistant_output_text_only() {
+    using namespace life_orchestrator::integration::inference;
+    const std::string response_body = R"({
+        "text":{"format":{"type":"json_schema","schema":{"type":"object","properties":{"mode":{"type":"string"},"matched_command":{"type":"string"}}}}},
+        "output":[
+            {"type":"reasoning","id":"rs_1"},
+            {"type":"message","role":"assistant","content":[
+                {"type":"output_text","text":"{\"mode\":\"proposed\",\"matched_command\":\"create_activity\",\"args\":\"create_activity --activity-id activity.weekly-laundry\",\"confidence\":0.88,\"reasoning_summary\":\"Weekly laundry fits activity creation.\",\"requires_confirmation\":false,\"closest_commands\":[\"create_activity\",\"status\"],\"user_facing_message\":\"Created a weekly laundry route.\"}"}
+            ]}
+        ],
+        "input_tokens":12,
+        "output_tokens":8,
+        "total_tokens":20
+    })";
+
+    const auto extracted = extract_openai_output_text_payload(response_body);
+    assert_true(extracted.has_value() && extracted->find("\"matched_command\":\"create_activity\"") != std::string::npos, "parser should extract assistant output_text payload from the output array");
+
+    const auto parsed = parse_openai_structured_output_to_key_value(response_body);
+    assert_true(parsed.has_value(), "parser should parse assistant output_text payload");
+    assert_true(parsed->find("raw_mode={") == std::string::npos, "parser should not treat schema metadata as raw mode");
+    assert_true(parsed->find("matched_command=procedural-upsert-activity") != std::string::npos, "parser should normalize matched_command from assistant output text");
+    assert_true(parsed->find("closest_commands=procedural-upsert-activity,status") != std::string::npos, "parser should preserve closest command normalization after extraction");
+}
+
+void test_openai_response_parser_ignores_schema_mode_objects() {
+    using namespace life_orchestrator::integration::inference;
+    const std::string response_body = R"({
+        "mode":{"type":"string"},
+        "text":{"format":{"schema":{"type":"object","properties":{"mode":{"type":"string"},"matched_command":{"type":"string"},"args":{"type":"string"}}}}},
+        "output":[
+            {"type":"message","role":"assistant","content":[
+                {"type":"input_text","text":"ignored"},
+                {"type":"output_text","text":"{\"mode\":\"proposed\",\"matched_command\":\"procedural-upsert-activity\",\"args\":\"procedural-upsert-activity --activity-id activity.weekly-laundry --title WeeklyLaundry\",\"confidence\":0.91,\"reasoning_summary\":\"Use the grounded activity upsert route.\",\"requires_confirmation\":false,\"closest_commands\":\"procedural-upsert-activity,status\",\"user_facing_message\":\"Mapped safely.\"}"}
+            ]}
+        ]
+    })";
+
+    const auto parsed = parse_openai_structured_output_to_key_value(response_body);
+    assert_true(parsed.has_value(), "parser should ignore schema property objects and still parse assistant output text");
+    assert_true(parsed->find("raw_mode=proposed") != std::string::npos, "assistant output_text mode should win over schema property objects");
+    assert_true(parsed->find("raw_mode={") == std::string::npos, "schema property object must not be treated as raw mode");
+    assert_true(parsed->find("matched_command=procedural-upsert-activity") != std::string::npos, "assistant routing object should still parse correctly");
 }
 
 void test_integration_test_provider_output_diagnostics() {
@@ -1951,6 +1997,8 @@ int main() {
         test_openai_transport_failure_and_registry_behavior();
         test_openai_transport_diagnostic_matrix();
         test_openai_transport_stage_accurate_outbound_attempts_and_diagnostics();
+        test_openai_response_parser_extracts_assistant_output_text_only();
+        test_openai_response_parser_ignores_schema_mode_objects();
         test_integration_test_provider_output_diagnostics();
         test_composer_input_and_attachment_persistence();
     } catch (const std::exception& e) {
