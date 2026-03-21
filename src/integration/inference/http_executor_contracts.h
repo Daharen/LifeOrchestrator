@@ -20,6 +20,12 @@ struct HttpResponseSpec {
     std::string body;
     std::string transport_error_text;
     bool success = false;
+    bool network_success = false;
+    std::string failure_stage;
+    std::string response_content_type;
+    std::string response_request_id;
+    std::string safe_error_summary;
+    std::string safe_body_preview;
 };
 
 class IHttpExecutor {

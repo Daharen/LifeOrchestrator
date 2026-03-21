@@ -54,7 +54,8 @@ ApplicationInvocationResult ProviderSetupService::SaveProvider(const ProviderSet
 ProviderSetupTestResult ProviderSetupService::TestProvider(const std::string& provider_name) const {
     auto result = invoke_application_command({"integration-test-provider", "--data-root=" + data_root_.string(), "--quiet-startup", "--provider-name", provider_name}, environment_data_root_, working_root_);
     const auto details = result.standard_output + result.standard_error;
-    auto summary = value_for_key(details, "message");
+    auto summary = value_for_key(details, "summary");
+    if (summary.empty()) summary = value_for_key(details, "message");
     if (summary.empty() && result.exit_code == 0) {
         const auto attempted = value_for_key(details, "outbound_request_attempted");
         const auto transport = value_for_key(details, "transport");

@@ -17,7 +17,7 @@ namespace {
 class WinHttpExecutor final : public IHttpExecutor {
 public:
     HttpResponseSpec Execute(const HttpRequestSpec&) const override {
-        return {0, {}, {}, "winhttp executor not yet enabled in this test environment", false};
+        return {0, {}, {}, "winhttp executor not yet enabled in this test environment", false, false, "open_session", {}, {}, "winhttp executor unavailable in this environment", {}};
     }
 };
 #else
@@ -36,9 +36,9 @@ public:
                 payload = R"({"mode":"failure","matched_command":"","args":"","confidence":0.21,"reasoning_summary":"No safe structured command mapping was found from the available command list.","requires_confirmation":false,"closest_commands":"status,help,suggest","user_facing_message":"I couldn't find a confident command match. Try one of the closest valid commands instead."})";
             }
             const auto body = std::string{"{\"output_text\":\""} + json_escape(payload) + "\",\"input_tokens\":12,\"output_tokens\":8,\"total_tokens\":20}";
-            return {200, {}, body, {}, true};
+            return {200, {}, body, {}, true, true, {}, "application/json", {}, {}, {}};
         }
-        return {0, {}, {}, "http executor is only implemented for Windows in this sprint", false};
+        return {0, {}, {}, "http executor is only implemented for Windows in this sprint", false, false, "open_session", {}, {}, "http executor unavailable on this platform", {}};
     }
 };
 #endif
