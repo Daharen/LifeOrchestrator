@@ -453,7 +453,7 @@ AssistantShellSubmissionResult AssistantShellSurfaceService::SubmitUserText(cons
             exec_summary.resolution_path = exec_summary.provider_used ? "constrained_intent_routing" : "exact_command_resolution";
             exec_summary.selected_route = sanitize_shell_field(value_for_key(combined, exec_summary.provider_used ? "matched_command" : "intent_route_command"), 96);
             if (exec_summary.selected_route.empty()) exec_summary.selected_route = sanitize_shell_field(value_for_key(combined, "matched_command"), 96);
-            std::string failure_classification;
+            std::string failure_classification = sanitize_shell_field(value_for_key(combined, "operator_query_failure_class"), 96);
             if (exec_summary.provider_used && exec_summary.selected_route.empty()) failure_classification = "provider_output_incomplete";
 
             const auto confidence_text = value_for_key(combined, "confidence");
@@ -483,11 +483,6 @@ AssistantShellSubmissionResult AssistantShellSurfaceService::SubmitUserText(cons
             const auto response_text = !user_message.empty() ? user_message : (!canonical.empty() ? "Completed " + canonical + "." : exec_summary.provider_used ? "The provider returned an incomplete shell response." : "Completed the requested action.");
 
             if (exec_summary.provider_used && user_message.empty() && failure_classification.empty()) failure_classification = "provider_output_incomplete";
-            const auto mode = sanitize_shell_field(value_for_key(combined, "mode"), 32);
-            if (exec_summary.provider_used && !mode.empty() && mode != "proposed" && mode != "failure") {
-                if (failure_classification.empty()) failure_classification = "provider_output_unrecognized";
-            }
-
             if (!failure_classification.empty()) {
                 auto provider_state = load_provider_operational_state(request.session_id);
                 provider_state.last_provider_test_state = exec_summary.provider_used ? "provider_output_rejected" : provider_state.last_provider_test_state;
@@ -544,7 +539,7 @@ AssistantShellSubmissionResult AssistantShellSurfaceService::SubmitUserText(cons
 
         auto assistant = make_failure_message("assistant-" + now_string(),
                                               "I couldn't complete that request. Try an exact command, an alias, or open Help for command discovery.",
-                                              "provider_output_unrecognized",
+                                              sanitize_shell_field(value_for_key(combined, "operator_query_failure_class"), 96).empty() ? "provider_output_unrecognized" : sanitize_shell_field(value_for_key(combined, "operator_query_failure_class"), 96),
                                               "No exact command or supported interpreted route could be completed.",
                                               combined.find("provider_request_provider_name=") != std::string::npos);
         auto status = build_status_snapshot(request.session_id, "Needs clarification", AssistantShellSessionMode::Concise);

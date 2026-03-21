@@ -1295,6 +1295,13 @@ void test_operator_query_provider_and_status_visibility() {
     assert_true(invalid_err.str().find("I couldn't find a confident command match") != std::string::npos, "invalid natural language should emit helpful explanation rather than argument noise");
     assert_true(invalid_out.str().find("closest_commands=") != std::string::npos, "invalid natural language should list closest valid commands");
 
+    std::ostringstream help_out;
+    std::ostringstream help_err;
+    rc = life_orchestrator::app::run_application({"operator-query", "--data-root=" + provider_root.string(), "--quiet-startup", "--input", "What can you do?"}, help_out, help_err, "", std::filesystem::current_path());
+    assert_true(rc == 2, "broad operator-query requests should degrade into a stable recognized failure");
+    assert_true(help_out.str().find("operator_query_failure_class=provider_output_invalid") != std::string::npos, "broad help-style prompts should produce a recognized failure class");
+    assert_true(help_err.str().find("Try one of the closest valid commands") != std::string::npos || help_err.str().find("Help") != std::string::npos, "broad help-style prompts should preserve the provider's helpful fallback guidance");
+
     std::ostringstream risky_out;
     std::ostringstream risky_err;
     rc = life_orchestrator::app::run_application({"operator-query", "--data-root=" + provider_root.string(), "--quiet-startup", "--input", "update the provider api key"}, risky_out, risky_err, "", std::filesystem::current_path());
@@ -1333,10 +1340,10 @@ void test_live_provider_route_hardening_matrix() {
     });
     assert_true(confirm.mode == "proposed" && confirm.requires_confirmation, "valid live provider output with confirmation true should parse stably");
 
-    const auto missing_command = route_with_provider("laundry", context, closest, [](const std::string&) {
+    const auto missing_command = normalize_intent_routing_result(route_with_provider("laundry", context, closest, [](const std::string&) {
         return std::string{"mode=proposed\nconfidence=0.92\nreasoning_summary=Missing command.\nrequires_confirmation=false\nclosest_commands=status,help\nuser_facing_message=Missing command.\n"};
-    });
-    assert_true(missing_command.matched_command.empty() && missing_command.user_facing_message == "Missing command.", "missing matched_command should stay stable and empty");
+    }), context, closest);
+    assert_true(missing_command.route.mode == "failure" && missing_command.failure_class == "provider_output_incomplete" && missing_command.route.user_facing_message == "Missing command.", "missing matched_command should degrade into a stable recognized failure");
 
     const auto missing_message = route_with_provider("laundry", context, closest, [](const std::string&) {
         return std::string{"mode=proposed\nmatched_command=status\nargs=status\nconfidence=0.92\nreasoning_summary=Missing message.\nrequires_confirmation=false\nclosest_commands=status,help\n"};
@@ -1357,6 +1364,21 @@ void test_live_provider_route_hardening_matrix() {
         return std::string{"mode=sideways\nmatched_command=status\nargs=status\nconfidence=0.5\nreasoning_summary=Unknown mode.\nrequires_confirmation=false\nclosest_commands=status,help\nuser_facing_message=Unknown mode.\n"};
     });
     assert_true(unknown_mode.mode == "sideways", "unknown mode should remain parseable for downstream normalization");
+
+    const auto normalized_mode_variant = normalize_intent_routing_result(route_with_provider("laundry", context, closest, [](const std::string&) {
+        return std::string{"mode=command\nmatched_command=procedural-upsert-activity\nargs=procedural-upsert-activity --activity-id activity.laundry\nconfidence=0.71\nreasoning_summary=Mode variant.\nrequires_confirmation=no\nclosest_commands=status,help\nuser_facing_message=Variant accepted.\n"};
+    }), context, closest);
+    assert_true(normalized_mode_variant.route.mode == "proposed" && normalized_mode_variant.failure_class.empty(), "mode variant command should normalize to proposed");
+
+    const auto ungrounded = normalize_intent_routing_result(route_with_provider("laundry", context, closest, [](const std::string&) {
+        return std::string{"mode=proposed\nmatched_command=magic-household-router\nargs=magic-household-router --foo bar\nconfidence=0.88\nreasoning_summary=Invented command.\nrequires_confirmation=false\nclosest_commands=status,help\nuser_facing_message=Invented command.\n"};
+    }), context, closest);
+    assert_true(ungrounded.route.mode == "failure" && ungrounded.failure_class == "provider_output_ungrounded_command", "invented commands should downgrade to grounded failure");
+
+    const auto help_failure = normalize_intent_routing_result(route_with_provider("what can you do?", context, closest, [](const std::string&) {
+        return std::string{"mode=no_match\nmatched_command=\nargs=\nconfidence=0.33\nreasoning_summary=Broad help request.\nrequires_confirmation=0\nclosest_commands=help,status\nuser_facing_message=Try Help for the full command list, or type an exact command like status.\n"};
+    }), context, closest);
+    assert_true(help_failure.route.mode == "failure" && help_failure.route.user_facing_message.find("Help") != std::string::npos, "broad prompts should normalize into helpful failure routes");
 
     const auto oversized_reasoning = route_with_provider("laundry", context, closest, [](const std::string&) {
         return std::string{"mode=proposed\nmatched_command=status\nargs=status\nconfidence=0.95\nreasoning_summary=Line one.\nLine two should be ignored by kv parsing.\nrequires_confirmation=false\nclosest_commands=status,help\nuser_facing_message=Oversized reasoning handled.\n"};
@@ -1508,6 +1530,10 @@ void test_inference_transport_contracts_and_redaction() {
 
     const auto parsed = parse_openai_structured_output_to_key_value(fake->next_response.body);
     assert_true(parsed.has_value() && parsed->find("mode=proposed") != std::string::npos, "structured json schema output should normalize to key-value format");
+
+    fake->next_response = make_http_response(200, R"({"output_text":"{\"mode\":\"command\",\"matched_command\":\"status\",\"args\":\"status\",\"confidence\":\"1.3\",\"reasoning_summary\":\"Healthy\",\"requires_confirmation\":\"no\",\"closest_commands\":[\"status\",\"help\"],\"user_facing_message\":\"Ready\"}","input_tokens":1,"output_tokens":1,"total_tokens":2})", {}, true, true, "read_body", std::nullopt, {}, "application/json", "req-variant");
+    const auto variant = parse_openai_structured_output_to_key_value(fake->next_response.body);
+    assert_true(variant.has_value() && variant->find("mode=proposed") != std::string::npos && variant->find("closest_commands=status,help") != std::string::npos && variant->find("requires_confirmation=false") != std::string::npos, "recoverable provider variants should normalize into the canonical key-value contract");
 }
 
 void test_provider_validation_paths_and_setup_service() {

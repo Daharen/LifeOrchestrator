@@ -41,6 +41,12 @@ struct IntentRoutingResult {
     std::string raw_model_output;
 };
 
+struct IntentRouteNormalizationOutcome {
+    IntentRoutingResult route;
+    std::string failure_class;
+    std::string acceptance_result;
+};
+
 using IntentProvider = std::function<std::string(const std::string& prompt)>;
 
 IntentCommandContext build_intent_command_context(const std::vector<std::string>& commands,
@@ -54,6 +60,10 @@ IntentRoutingResult route_with_provider(const std::string& input,
                                         const IntentCommandContext& context,
                                         const std::vector<std::string>& closest_commands,
                                         const IntentProvider& provider);
+
+IntentRouteNormalizationOutcome normalize_intent_routing_result(IntentRoutingResult result,
+                                                                const IntentCommandContext& context,
+                                                                const std::vector<std::string>& fallback_closest_commands);
 
 std::string serialize_intent_routing_result(const IntentRoutingResult& result);
 

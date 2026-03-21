@@ -876,8 +876,8 @@ ApplicationExitCode execute_command(ApplicationRuntime& runtime,
             std::replace(value.begin(), value.end(), '\r', ' ');
             return value;
         };
-        auto normalized_route = route;
-        if (normalized_route.mode.empty()) normalized_route.mode = "failure";
+        auto normalization = normalize_intent_routing_result(route, context, closest);
+        auto normalized_route = normalization.route;
         normalized_route.matched_command = trim_copy(normalized_route.matched_command);
         normalized_route.user_facing_message = sanitize_operator_value(normalized_route.user_facing_message, 320);
         normalized_route.reasoning_summary = sanitize_operator_value(normalized_route.reasoning_summary, 320);
@@ -890,12 +890,16 @@ ApplicationExitCode execute_command(ApplicationRuntime& runtime,
         routed_output << "provider_request_provider_name=" << provider.integration_id << '\n';
         routed_output << "provider_request_model_name=" << default_if_empty(provider.non_secret_settings.contains("model_name") ? provider.non_secret_settings.at("model_name") : std::string{}, "unset") << '\n';
         routed_output << "intent_model_output=" << normalized_route.raw_model_output << '\n';
+        routed_output << "normalized_mode=" << sanitize_operator_value(normalized_route.mode, 32) << '\n';
+        routed_output << "normalized_matched_command=" << sanitize_operator_value(normalized_route.matched_command, 160) << '\n';
+        routed_output << "normalized_requires_confirmation=" << (normalized_route.requires_confirmation ? "true" : "false") << '\n';
+        routed_output << "normalized_confidence=" << normalized_route.confidence << '\n';
+        routed_output << "route_acceptance_result=" << sanitize_operator_value(normalization.acceptance_result, 96) << '\n';
         routed_output << serialize_intent_routing_result(normalized_route);
         routed_output << "intent_route_command=" << sanitize_operator_value(normalized_route.matched_command, 160) << '\n';
 
-        const bool invalid_mode = normalized_route.mode != "proposed" && normalized_route.mode != "failure";
-        if (invalid_mode || normalized_route.mode == "failure" || normalized_route.matched_command.empty()) {
-            routed_output << "operator_query_failure_class=" << (invalid_mode ? "provider_output_unrecognized" : normalized_route.matched_command.empty() ? "provider_output_incomplete" : "provider_output_invalid") << '\n';
+        if (normalized_route.mode == "failure" || normalized_route.matched_command.empty()) {
+            routed_output << "operator_query_failure_class=" << sanitize_operator_value(normalization.failure_class, 96) << '\n';
             routed_error << "operator_query=failed\nmessage=" << normalized_route.user_facing_message << '\n';
             return ApplicationExitCode::CommandValidationFailure;
         }
