@@ -8,7 +8,10 @@
 #include "ui/provider_setup/provider_setup_controller.h"
 #include "ui/artifact_panels/artifact_panels_registry.hpp"
 #include "ui/assistant_shell/assistant_shell_composer_input.h"
+#include "integration/inference/http_executor_contracts.h"
 #include "integration/inference/inference_transport_client.h"
+#include "integration/inference/openai_responses_request_builder.h"
+#include "integration/inference/openai_responses_response_parser.h"
 #include "control_plane/control_plane.hpp"
 #include "coordination/behavioral_triage_module.hpp"
 #include "coordination/scheduling_coordination_module.hpp"
@@ -26,6 +29,17 @@
 #include <vector>
 
 namespace {
+
+
+struct FakeHttpExecutor final : life_orchestrator::integration::inference::IHttpExecutor {
+    mutable std::vector<life_orchestrator::integration::inference::HttpRequestSpec> requests;
+    life_orchestrator::integration::inference::HttpResponseSpec next_response{200, {}, R"({"output_text":"{\"mode\":\"proposed\",\"matched_command\":\"procedural-upsert-activity\",\"args\":\"procedural-upsert-activity --activity-id activity.weekly-laundry --title WeeklyLaundry --domain-source home --frequency weekly --duration-minutes 60 --effort-estimate 4 --outcome-value 6\",\"confidence\":0.92,\"reasoning_summary\":\"Weekly laundry maps cleanly.\",\"requires_confirmation\":false,\"closest_commands\":\"procedural-upsert-activity,status\",\"user_facing_message\":\"Mapped request safely.\"}","input_tokens":11,"output_tokens":7,"total_tokens":18})", {}, true};
+
+    life_orchestrator::integration::inference::HttpResponseSpec Execute(const life_orchestrator::integration::inference::HttpRequestSpec& request) const override {
+        requests.push_back(request);
+        return next_response;
+    }
+};
 
 void assert_true(bool condition, const std::string& message) {
     if (!condition) throw std::runtime_error(message);
@@ -1378,14 +1392,26 @@ void test_inference_transport_contracts_and_redaction() {
     using namespace life_orchestrator::integration::inference;
     assert_true(redact_secret("TEST_KEY_123") == "TE***23", "transport redaction should preserve only safe boundary characters");
 
+    auto fake = std::make_shared<FakeHttpExecutor>();
+    ProviderTransportRegistry registry(fake);
+    const auto& unsupported = registry.Resolve("stub");
+    assert_true(unsupported.name() == "unsupported_provider_transport", "non-openai providers should resolve to unsupported transport");
+
     const life_orchestrator::core::IntegrationConfigurationRecord record{
-        "provider.stub", "stub", "Stub", true, life_orchestrator::core::IntegrationStatus::Enabled, {}, {},
-        life_orchestrator::core::CredentialStorageMode::ExternalSecretReference, "config/providers/stub.secret",
+        "provider.openai", "openai", "OpenAI", true, life_orchestrator::core::IntegrationStatus::Enabled, {}, {},
+        life_orchestrator::core::CredentialStorageMode::ExternalSecretReference, "config/providers/openai.secret",
         {{"model_name", "gpt-5"}}, "2026-03-21T00:00:00.000Z", "2026-03-21T00:00:00.000Z", 1};
-    InferenceTransportClient client;
-    const auto result = client.Interpret(record, "TEST_KEY_123", "req-1", {{"user", "create a weekly laundry reminder"}});
+    InferenceTransportClient client(fake);
+    const auto result = client.Interpret(record, "TEST_KEY_123", "req-1", {{"system", "Return structured output only."}, {"user", "create a weekly laundry task"}});
     assert_true(result.ok, "transport client should return structured output");
     assert_true(result.output_text.find("matched_command=procedural-upsert-activity") != std::string::npos, "transport output should remain structured");
+    assert_true(!fake->requests.empty(), "fake executor should capture outbound requests");
+    assert_true(fake->requests.back().headers.at("Authorization") == "Bearer TEST_KEY_123", "transport should build bearer auth header");
+    assert_true(fake->requests.back().body.find("TEST_KEY_123") == std::string::npos, "transport request body should not leak secret");
+    assert_true(fake->requests.back().url == default_openai_responses_endpoint(), "openai transport should default the responses endpoint");
+
+    const auto parsed = parse_openai_structured_output_to_key_value(fake->next_response.body);
+    assert_true(parsed.has_value() && parsed->find("mode=proposed") != std::string::npos, "structured json schema output should normalize to key-value format");
 }
 
 void test_provider_validation_paths_and_setup_service() {
@@ -1408,15 +1434,21 @@ void test_provider_validation_paths_and_setup_service() {
 
     out.str(""); out.clear(); err.str(""); err.clear();
     rc = life_orchestrator::app::run_application({"integration-set-provider", "--data-root=" + root.string(), "--quiet-startup", "--provider-name", "stub", "--api-key", "TEST_KEY_123", "--model-name", "gpt-5", "--display-name", "Stub Provider"}, out, err, "", std::filesystem::current_path());
-    assert_true(rc == 0, "healthy provider should persist");
+    assert_true(rc == 0, "unsupported provider metadata should still persist");
     out.str(""); out.clear(); err.str(""); err.clear();
     rc = life_orchestrator::app::run_application({"integration-test-provider", "--data-root=" + root.string(), "--quiet-startup", "--provider-name", "stub"}, out, err, "", std::filesystem::current_path());
-    assert_true(rc == 0, "healthy provider validation should succeed");
-    assert_true(out.str().find("structured_result_returned=true") != std::string::npos, "provider validation should confirm structured result");
+    assert_true(rc != 0, "unsupported provider validation should fail");
+    assert_true(err.str().find("message=unsupported_provider") != std::string::npos, "unsupported provider validation should surface safe failure class");
+    assert_true(err.str().find("TEST_KEY_123") == std::string::npos, "unsupported provider validation should not leak secrets");
 
     setup::ProviderSetupService service(root, std::filesystem::current_path(), "");
     const auto providers = service.ListProviders();
     assert_true(!providers.empty(), "provider setup service should list configured providers");
+    const auto openai_test = service.TestProvider("openai");
+    assert_true(!openai_test.ok, "provider setup service should surface missing-secret failures");
+    const auto stub_test = service.TestProvider("stub");
+    assert_true(!stub_test.ok, "provider setup service should report unsupported providers plainly");
+    assert_true(stub_test.summary.find("unsupported") != std::string::npos, "unsupported provider status text should be plain");
 }
 
 void test_provider_setup_controller_round_trip() {
@@ -1428,19 +1460,34 @@ void test_provider_setup_controller_round_trip() {
     auto service = std::make_shared<setup::ProviderSetupService>(root, std::filesystem::current_path(), "");
     ui_setup::ProviderSetupController controller(service);
 
-    const auto save_result = controller.SaveProvider({"stub", "Stub Provider", "gpt-5", "direct", "TEST_KEY_123", "", "", false});
+    const auto save_result = controller.SaveProvider({"openai", "OpenAI", "gpt-5", "direct", "TEST_KEY_123", "", "", false});
     assert_true(save_result.exit_code == 0, "provider setup controller should save via service pass-through");
-    assert_true(save_result.standard_output.find("provider_name=stub") != std::string::npos, "controller save should preserve authoritative stdout");
+    assert_true(save_result.standard_output.find("provider_name=openai") != std::string::npos, "controller save should preserve authoritative stdout");
 
     const auto providers = controller.ListProviders();
     assert_true(providers.size() == 1, "controller list should surface saved providers");
-    assert_true(providers.front().provider_name == "stub", "controller list should preserve provider names");
+    assert_true(providers.front().provider_name == "openai", "controller list should preserve provider names");
     assert_true(!providers.front().enabled, "controller list should preserve enabled state");
     assert_true(providers.front().redacted_secret_status.find("***") != std::string::npos, "controller list should preserve redacted secret status");
 
-    const auto test_result = controller.TestProvider("stub");
+    const auto test_result = controller.TestProvider("openai");
     assert_true(test_result.ok, "controller test should call provider readiness path");
     assert_true(test_result.safe_details.find("structured_result_returned=true") != std::string::npos, "controller test should preserve safe readiness details");
+}
+
+
+void test_openai_transport_failure_and_registry_behavior() {
+    using namespace life_orchestrator::integration::inference;
+    auto fake = std::make_shared<FakeHttpExecutor>();
+    fake->next_response = {429, {}, "{}", {}, true};
+    InferenceTransportClient client(fake);
+    const life_orchestrator::core::IntegrationConfigurationRecord record{
+        "provider.openai", "OpenAI", "OpenAI", true, life_orchestrator::core::IntegrationStatus::Enabled, {}, {},
+        life_orchestrator::core::CredentialStorageMode::ExternalSecretReference, "config/providers/openai.secret",
+        {{"model_name", "gpt-5"}}, "2026-03-21T00:00:00.000Z", "2026-03-21T00:00:00.000Z", 1};
+    const auto result = client.Interpret(record, "TEST_KEY_123", "req-rate", {{"user", "test"}});
+    assert_true(!result.ok && result.error.has_value() && result.error->failure_class == "rate_limited", "rate limits should surface safe failure class");
+    assert_true(result.error->message.find("TEST_KEY_123") == std::string::npos, "transport failures should not leak secrets");
 }
 
 void test_composer_input_and_attachment_persistence() {
@@ -1510,6 +1557,7 @@ int main() {
         test_inference_transport_contracts_and_redaction();
         test_provider_validation_paths_and_setup_service();
         test_provider_setup_controller_round_trip();
+        test_openai_transport_failure_and_registry_behavior();
         test_composer_input_and_attachment_persistence();
     } catch (const std::exception& e) {
         std::cerr << "Test failure: " << e.what() << '\n';

@@ -18,8 +18,12 @@ target_include_directories(lifeorchestrator_core PUBLIC src)
 
 add_library(lifeorchestrator_integration
     src/integration/integration_configuration_repository.cpp
+    src/integration/inference/http_executor_contracts.cpp
     src/integration/inference/inference_transport_contracts.cpp
     src/integration/inference/inference_transport_client.cpp
+    src/integration/inference/openai_json_escape.cpp
+    src/integration/inference/openai_responses_request_builder.cpp
+    src/integration/inference/openai_responses_response_parser.cpp
     src/integration/inference/provider_http_transport.cpp
     src/integration/inference/provider_transport_registry.cpp
 )
