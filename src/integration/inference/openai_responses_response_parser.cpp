@@ -34,8 +34,9 @@ std::string trim_copy(const std::string& value) {
 
 std::string normalize_mode(const std::string& value) {
     const auto lowered = lower_copy(value);
-    if (lowered == "command" || lowered == "proposal" || lowered == "success") return "proposed";
-    if (lowered == "no_match" || lowered == "error") return "failure";
+    if (lowered == "command" || lowered == "proposal" || lowered == "success" || lowered == "no_match" || lowered == "error" ||
+        lowered == "needs_clarification" || lowered == "clarification" ||
+        lowered == "question" || lowered == "capability_help") return "failure";
     return value;
 }
 
@@ -194,8 +195,10 @@ std::optional<std::string> parse_openai_structured_output_to_key_value(const std
         return std::nullopt;
     }
 
-    const auto mode = normalize_mode(scalar_field(structured_json, "mode"));
-    const auto matched_command = normalize_command_like_field(structured_json, "matched_command");
+    const auto raw_mode = scalar_field(structured_json, "mode");
+    const auto mode = normalize_mode(raw_mode);
+    const auto raw_matched_command = scalar_field(structured_json, "matched_command");
+    const auto matched_command = normalize_command_alias(raw_matched_command);
     const auto args = normalize_args(structured_json, matched_command);
     const auto confidence = normalize_confidence(scalar_field(structured_json, "confidence", "0"));
     const auto reasoning_summary = scalar_field(structured_json, "reasoning_summary");
@@ -206,7 +209,9 @@ std::optional<std::string> parse_openai_structured_output_to_key_value(const std
 
     std::ostringstream out;
     out << "mode=" << mode << '\n'
+        << "raw_mode=" << raw_mode << '\n'
         << "matched_command=" << matched_command << '\n'
+        << "raw_matched_command=" << raw_matched_command << '\n'
         << "args=" << args << '\n'
         << "confidence=" << confidence << '\n'
         << "reasoning_summary=" << reasoning_summary << '\n'

@@ -31,7 +31,9 @@ struct IntentCommandContext {
 
 struct IntentRoutingResult {
     std::string mode;
+    std::string raw_mode;
     std::string matched_command;
+    std::string raw_matched_command;
     std::vector<std::string> args;
     double confidence = 0.0;
     std::string reasoning_summary;

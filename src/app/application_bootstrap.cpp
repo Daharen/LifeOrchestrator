@@ -907,7 +907,9 @@ ApplicationExitCode execute_command(ApplicationRuntime& runtime,
         routed_output << "provider_request_provider_name=" << provider.integration_id << '\n';
         routed_output << "provider_request_model_name=" << default_if_empty(provider.non_secret_settings.contains("model_name") ? provider.non_secret_settings.at("model_name") : std::string{}, "unset") << '\n';
         routed_output << "intent_model_output=" << normalized_route.raw_model_output << '\n';
+        routed_output << "raw_mode=" << sanitize_operator_value(normalized_route.raw_mode, 32) << '\n';
         routed_output << "normalized_mode=" << sanitize_operator_value(normalized_route.mode, 32) << '\n';
+        routed_output << "raw_matched_command=" << sanitize_operator_value(normalized_route.raw_matched_command, 160) << '\n';
         routed_output << "normalized_matched_command=" << sanitize_operator_value(normalized_route.matched_command, 160) << '\n';
         routed_output << "normalized_args=" << sanitize_operator_value(join_values(normalized_route.args, " "), 320) << '\n';
         routed_output << "normalized_confidence=" << normalized_route.confidence << '\n';
