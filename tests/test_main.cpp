@@ -12,6 +12,7 @@
 #include "integration/inference/inference_transport_client.h"
 #include "integration/inference/openai_responses_request_builder.h"
 #include "integration/inference/openai_responses_response_parser.h"
+#include "intelligence/intent_router.hpp"
 #include "control_plane/control_plane.hpp"
 #include "coordination/behavioral_triage_module.hpp"
 #include "coordination/scheduling_coordination_module.hpp"
@@ -1316,6 +1317,76 @@ void test_operator_query_provider_and_status_visibility() {
 }
 
 
+
+void test_live_provider_route_hardening_matrix() {
+    using namespace life_orchestrator::app;
+    const auto context = build_intent_command_context(list_application_commands(), list_application_aliases(), list_action_form_specs());
+    const std::vector<std::string> closest = {"status", "help"};
+
+    const auto valid = route_with_provider("create a weekly laundry task", context, closest, [](const std::string&) {
+        return std::string{"mode=proposed\nmatched_command=procedural-upsert-activity\nargs=procedural-upsert-activity --activity-id activity.weekly-laundry\nconfidence=0.92\nreasoning_summary=Weekly laundry maps cleanly.\nrequires_confirmation=false\nclosest_commands=procedural-upsert-activity,status\nuser_facing_message=Mapped request safely.\n"};
+    });
+    assert_true(valid.mode == "proposed" && valid.matched_command == "procedural-upsert-activity" && !valid.requires_confirmation, "valid live provider output with confirmation false should parse stably");
+
+    const auto confirm = route_with_provider("update provider key", context, closest, [](const std::string&) {
+        return std::string{"mode=proposed\nmatched_command=integration-set-provider\nargs=integration-set-provider --provider-name openai\nconfidence=0.82\nreasoning_summary=High risk.\nrequires_confirmation=true\nclosest_commands=integration-set-provider,status\nuser_facing_message=Needs confirmation.\n"};
+    });
+    assert_true(confirm.mode == "proposed" && confirm.requires_confirmation, "valid live provider output with confirmation true should parse stably");
+
+    const auto missing_command = route_with_provider("laundry", context, closest, [](const std::string&) {
+        return std::string{"mode=proposed\nconfidence=0.92\nreasoning_summary=Missing command.\nrequires_confirmation=false\nclosest_commands=status,help\nuser_facing_message=Missing command.\n"};
+    });
+    assert_true(missing_command.matched_command.empty() && missing_command.user_facing_message == "Missing command.", "missing matched_command should stay stable and empty");
+
+    const auto missing_message = route_with_provider("laundry", context, closest, [](const std::string&) {
+        return std::string{"mode=proposed\nmatched_command=status\nargs=status\nconfidence=0.92\nreasoning_summary=Missing message.\nrequires_confirmation=false\nclosest_commands=status,help\n"};
+    });
+    assert_true(missing_message.user_facing_message.find("couldn't map") != std::string::npos, "missing user_facing_message should retain stable fallback message");
+
+    const auto bad_confidence = route_with_provider("laundry", context, closest, [](const std::string&) {
+        return std::string{"mode=proposed\nmatched_command=status\nargs=status\nconfidence=not-a-number\nreasoning_summary=Bad confidence.\nrequires_confirmation=false\nclosest_commands=status,help\nuser_facing_message=Bad confidence.\n"};
+    });
+    assert_true(bad_confidence.matched_command.empty() && bad_confidence.user_facing_message.find("invalid confidence") != std::string::npos, "malformed confidence should degrade gracefully instead of throwing");
+
+    const auto bad_confirmation = route_with_provider("laundry", context, closest, [](const std::string&) {
+        return std::string{"mode=proposed\nmatched_command=status\nargs=status\nconfidence=0.5\nreasoning_summary=Bad confirm.\nrequires_confirmation=maybe\nclosest_commands=status,help\nuser_facing_message=Bad confirmation.\n"};
+    });
+    assert_true(bad_confirmation.matched_command.empty() && bad_confirmation.user_facing_message.find("invalid confirmation") != std::string::npos, "malformed requires_confirmation should degrade gracefully instead of throwing");
+
+    const auto unknown_mode = route_with_provider("laundry", context, closest, [](const std::string&) {
+        return std::string{"mode=sideways\nmatched_command=status\nargs=status\nconfidence=0.5\nreasoning_summary=Unknown mode.\nrequires_confirmation=false\nclosest_commands=status,help\nuser_facing_message=Unknown mode.\n"};
+    });
+    assert_true(unknown_mode.mode == "sideways", "unknown mode should remain parseable for downstream normalization");
+
+    const auto oversized_reasoning = route_with_provider("laundry", context, closest, [](const std::string&) {
+        return std::string{"mode=proposed\nmatched_command=status\nargs=status\nconfidence=0.95\nreasoning_summary=Line one.\nLine two should be ignored by kv parsing.\nrequires_confirmation=false\nclosest_commands=status,help\nuser_facing_message=Oversized reasoning handled.\n"};
+    });
+    assert_true(oversized_reasoning.matched_command == "status", "oversized multiline reasoning text should still yield a stable parsed route");
+
+    const auto serialized = serialize_intent_routing_result(oversized_reasoning);
+    assert_true(serialized.find("matched_command=status") != std::string::npos, "stable routes should remain serializable after hardening");
+}
+
+void test_assistant_shell_live_provider_degrades_gracefully_for_invalid_routes() {
+    namespace shell = life_orchestrator::app::assistant_shell;
+    const std::filesystem::path root = "artifacts/assistant_shell_live_provider_invalid";
+    std::filesystem::remove_all(root);
+
+    std::ostringstream out;
+    std::ostringstream err;
+    auto rc = life_orchestrator::app::run_application({"integration-set-provider", "--data-root=" + root.string(), "--quiet-startup", "--provider-name", "openai", "--api-key", "TEST_KEY_123", "--model-name", "gpt-5"}, out, err, "", std::filesystem::current_path());
+    assert_true(rc == 0, "provider should configure for live provider shell tests");
+
+    shell::AssistantShellSurfaceService service(root, std::filesystem::current_path(), "");
+    service.StartOrResumeSession("session-live-provider");
+
+    const auto ok_result = service.SubmitUserText({"session-live-provider", "create a weekly laundry task"});
+    assert_true(ok_result.ok && !ok_result.appended_messages.empty(), "valid live provider output with confirmation false should reach the shell safely");
+
+    const auto confirm_result = service.SubmitUserText({"session-live-provider", "update the provider api key"});
+    assert_true(confirm_result.ok && confirm_result.pending_confirmation.has_value(), "valid live provider output with confirmation true should create confirmation state safely");
+}
+
 void test_assistant_shell_surface_contract_strings() {
     using namespace life_orchestrator::app::assistant_shell;
     assert_true(to_string(AssistantShellMessageBlockType::ExecutionSummary) == "execution_summary", "contract string conversion should be stable");
@@ -1658,6 +1729,8 @@ int main() {
         test_integration_provider_persistence_redaction_and_visibility();
         test_integration_set_provider_env_var_reference_mode();
         test_operator_query_provider_and_status_visibility();
+        test_live_provider_route_hardening_matrix();
+        test_assistant_shell_live_provider_degrades_gracefully_for_invalid_routes();
         test_assistant_shell_surface_contract_strings();
         test_assistant_shell_submission_routing_precedence();
         test_assistant_shell_confirmation_generation_and_acceptance();

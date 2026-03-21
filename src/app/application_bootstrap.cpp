@@ -4,6 +4,7 @@
 #include "app/app_support/intent_command_context.hpp"
 #include "app/app_support/intent_routing_contract.hpp"
 #include "app/application_bootstrap.hpp"
+#include "integration/inference/inference_transport_contracts.h"
 #include "integration/inference/inference_transport_client.h"
 #include "integration/inference/openai_responses_request_builder.h"
 #include "coordination/scheduling_engine.hpp"
@@ -869,24 +870,42 @@ ApplicationExitCode execute_command(ApplicationRuntime& runtime,
                                                [&](const std::string& prompt) {
                                                    return run_provider_request(provider, prompt + "\nUser request: " + input).second;
                                                });
+        auto sanitize_operator_value = [](std::string value, std::size_t max_length = 512) {
+            value = life_orchestrator::integration::inference::sanitize_diagnostic_text(value, max_length);
+            std::replace(value.begin(), value.end(), '\n', ' ');
+            std::replace(value.begin(), value.end(), '\r', ' ');
+            return value;
+        };
+        auto normalized_route = route;
+        if (normalized_route.mode.empty()) normalized_route.mode = "failure";
+        normalized_route.matched_command = trim_copy(normalized_route.matched_command);
+        normalized_route.user_facing_message = sanitize_operator_value(normalized_route.user_facing_message, 320);
+        normalized_route.reasoning_summary = sanitize_operator_value(normalized_route.reasoning_summary, 320);
+        normalized_route.raw_model_output = sanitize_operator_value(normalized_route.raw_model_output, 512);
+        if (normalized_route.user_facing_message.empty()) normalized_route.user_facing_message = "The provider returned an incomplete operator-query result.";
+        if (normalized_route.reasoning_summary.empty()) normalized_route.reasoning_summary = "Provider output omitted a reasoning summary.";
+        normalized_route.closest_commands.erase(std::remove_if(normalized_route.closest_commands.begin(), normalized_route.closest_commands.end(), [](const std::string& value) { return trim_copy(value).empty(); }), normalized_route.closest_commands.end());
+
         routed_output << "operator_query=llm_interpreter\n";
         routed_output << "provider_request_provider_name=" << provider.integration_id << '\n';
         routed_output << "provider_request_model_name=" << default_if_empty(provider.non_secret_settings.contains("model_name") ? provider.non_secret_settings.at("model_name") : std::string{}, "unset") << '\n';
-        routed_output << "intent_model_output=" << route.raw_model_output << '\n';
-        routed_output << serialize_intent_routing_result(route);
-        routed_output << "intent_route_command=" << route.matched_command << '\n';
+        routed_output << "intent_model_output=" << normalized_route.raw_model_output << '\n';
+        routed_output << serialize_intent_routing_result(normalized_route);
+        routed_output << "intent_route_command=" << sanitize_operator_value(normalized_route.matched_command, 160) << '\n';
 
-        if (route.mode == "failure" || route.matched_command.empty()) {
-            routed_error << "operator_query=failed\nmessage=" << route.user_facing_message << '\n';
+        const bool invalid_mode = normalized_route.mode != "proposed" && normalized_route.mode != "failure";
+        if (invalid_mode || normalized_route.mode == "failure" || normalized_route.matched_command.empty()) {
+            routed_output << "operator_query_failure_class=" << (invalid_mode ? "provider_output_unrecognized" : normalized_route.matched_command.empty() ? "provider_output_incomplete" : "provider_output_invalid") << '\n';
+            routed_error << "operator_query=failed\nmessage=" << normalized_route.user_facing_message << '\n';
             return ApplicationExitCode::CommandValidationFailure;
         }
-        if (route.requires_confirmation || route.confidence < 0.9) {
+        if (normalized_route.requires_confirmation || normalized_route.confidence < 0.9) {
             routed_output << "intent_execution=deferred_for_confirmation\n";
             return ApplicationExitCode::Success;
         }
 
-        auto forwarded = route.args;
-        if (forwarded.empty()) forwarded.push_back(route.matched_command);
+        auto forwarded = normalized_route.args;
+        if (forwarded.empty()) forwarded.push_back(normalized_route.matched_command);
         forwarded.push_back("--data-root=" + runtime.config.data_root_path.string());
         forwarded.push_back("--quiet-startup");
         routed_output << "intent_execution=executed\n";

@@ -3,10 +3,14 @@
 #include "app/app_support/action_form_registry.hpp"
 #include "app/app_support/artifact_presentation_registry.hpp"
 #include "intelligence/intent_router.hpp"
+#include "integration/inference/inference_transport_contracts.h"
 
 #include <algorithm>
 #include <cctype>
+#include <cmath>
 #include <fstream>
+#include <iostream>
+#include <limits>
 #include <sstream>
 
 namespace life_orchestrator::app::assistant_shell {
@@ -66,6 +70,81 @@ AssistantShellMessage make_text_message(const std::string& id,
                                         AssistantShellMessageBlockType type,
                                         const std::string& text) {
     return {id, role, {{type, text, false, std::nullopt, std::nullopt, std::nullopt}}};
+}
+
+constexpr std::size_t kMaxShellFieldLength = 240;
+
+void emit_shell_diagnostic(const std::string& marker, const std::string& detail = {}) {
+    std::clog << marker;
+    if (!detail.empty()) std::clog << " detail=" << sanitize_line(life_orchestrator::integration::inference::sanitize_diagnostic_text(detail, 160));
+    std::clog << '\n';
+}
+
+std::string sanitize_shell_field(std::string value, std::size_t max_length = kMaxShellFieldLength) {
+    value = sanitize_line(trim_copy(value));
+    if (value.size() > max_length) value = value.substr(0, max_length) + "...";
+    return value;
+}
+
+bool try_parse_confidence(const std::string& value, double& parsed) {
+    const auto trimmed = trim_copy(value);
+    if (trimmed.empty()) { parsed = 0.0; return false; }
+    try {
+        size_t consumed = 0;
+        parsed = std::stod(trimmed, &consumed);
+        if (consumed != trimmed.size() || !std::isfinite(parsed)) { parsed = 0.0; return false; }
+        if (parsed < 0.0) parsed = 0.0;
+        if (parsed > 1.0) parsed = 1.0;
+        return true;
+    } catch (...) {
+        parsed = 0.0;
+        return false;
+    }
+}
+
+bool try_parse_bool(const std::string& value, bool& parsed) {
+    const auto normalized = lower_copy(trim_copy(value));
+    if (normalized == "true" || normalized == "1" || normalized == "yes") { parsed = true; return true; }
+    if (normalized == "false" || normalized == "0" || normalized == "no" || normalized.empty()) { parsed = false; return !normalized.empty(); }
+    parsed = false;
+    return false;
+}
+
+std::vector<std::string> parse_closest_commands(const std::string& value) {
+    std::vector<std::string> commands;
+    std::stringstream input(value);
+    std::string token;
+    while (std::getline(input, token, ',')) {
+        token = sanitize_shell_field(token, 64);
+        if (!token.empty()) commands.push_back(token);
+    }
+    return commands;
+}
+
+std::vector<std::string> parse_command_args(const std::string& value) {
+    std::vector<std::string> args;
+    std::istringstream in(value);
+    std::string token;
+    while (in >> token) args.push_back(sanitize_shell_field(token, 120));
+    return args;
+}
+
+AssistantShellMessage make_failure_message(const std::string& message_id,
+                                           const std::string& assistant_text,
+                                           const std::string& failure_classification,
+                                           const std::string& explanation,
+                                           bool provider_used) {
+    AssistantShellExecutionSummary exec_summary;
+    exec_summary.provider_used = provider_used;
+    exec_summary.resolution_path = "constrained_intent_routing";
+    exec_summary.selected_route = sanitize_shell_field(failure_classification, 64);
+    exec_summary.confidence = 0.0;
+    exec_summary.confirmation_required = false;
+    exec_summary.explanation = sanitize_shell_field(explanation);
+    return {message_id,
+            "assistant",
+            {{AssistantShellMessageBlockType::AssistantResponse, sanitize_shell_field(assistant_text, 320), false, std::nullopt, std::nullopt, std::nullopt},
+             {AssistantShellMessageBlockType::ExecutionSummary, "Thinking (Extended)", true, exec_summary, std::nullopt, std::nullopt}}};
 }
 
 }  // namespace
@@ -331,105 +410,168 @@ AssistantShellStartupSnapshot AssistantShellSurfaceService::StartOrResumeSession
 }
 
 AssistantShellSubmissionResult AssistantShellSurfaceService::SubmitUserText(const AssistantShellSubmissionRequest& request) {
+    emit_shell_diagnostic("assistant_shell_submit_begin");
     auto summary = make_session_summary(request.session_id);
     auto messages = load_session_messages(request.session_id);
-    messages.push_back(make_text_message("user-" + now_string(), "user", AssistantShellMessageBlockType::UserText, request.user_text));
+    messages.push_back(make_text_message("user-" + now_string(), "user", AssistantShellMessageBlockType::UserText, sanitize_shell_field(request.user_text, 320)));
 
     auto append_and_persist = [&](const AssistantShellMessage& assistant_message,
                                   const AssistantShellStatusSnapshot& status,
-                                  const std::optional<PendingConfirmationState>& pending) {
+                                  const std::optional<PendingConfirmationState>& pending,
+                                  AssistantShellProviderOperationalState provider_state = {}) {
         messages.push_back(assistant_message);
         summary.updated_at = now_string();
         if (summary.title == "Assistant Session") summary.title = default_session_title(request.user_text);
-        persist_session(summary, messages, status, pending, {request.attachments}, load_provider_operational_state(request.session_id));
+        persist_session(summary, messages, status, pending, {request.attachments}, provider_state.last_provider_test_state.empty() && provider_state.last_provider_remediation_guidance_state.empty() && provider_state.last_configured_active_provider_summary.empty() ? load_provider_operational_state(request.session_id) : provider_state);
     };
 
-    const auto command_result = invoke_application_command({"operator-query", "--data-root=" + data_root_.string(), "--quiet-startup", "--input", request.user_text}, environment_data_root_, working_root_);
-    const auto combined = command_result.standard_output + "\n" + command_result.standard_error;
+    try {
+        const auto command_result = invoke_application_command({"operator-query", "--data-root=" + data_root_.string(), "--quiet-startup", "--input", request.user_text}, environment_data_root_, working_root_);
+        const auto combined = command_result.standard_output + "\n" + command_result.standard_error;
+        emit_shell_diagnostic("assistant_shell_provider_result_received", combined);
 
-    AssistantShellExecutionSummary exec_summary;
-    exec_summary.provider_used = combined.find("provider_request_provider_name=") != std::string::npos;
+        AssistantShellExecutionSummary exec_summary;
+        exec_summary.provider_used = combined.find("provider_request_provider_name=") != std::string::npos;
 
-    if (combined.find("operator_query=failed\nmessage=no_provider_configured") != std::string::npos) {
-        exec_summary.resolution_path = "constrained_intent_routing";
-        exec_summary.selected_route = "provider_unavailable";
-        exec_summary.confidence = 0.0;
-        exec_summary.confirmation_required = false;
-        exec_summary.explanation = "Natural-language interpretation needs provider transport, so the shell returned a remediation path instead.";
-        AssistantShellMessage assistant{"assistant-" + now_string(),
-                                        "assistant",
-                                        {{AssistantShellMessageBlockType::AssistantResponse, "I can still run exact commands, but provider-backed interpretation is not configured yet. Configure a provider to enable broader routing.", false, std::nullopt, std::nullopt, std::nullopt},
-                                         {AssistantShellMessageBlockType::ExecutionSummary, "Thinking (Extended)", true, exec_summary, std::nullopt, std::nullopt}}};
-        auto status = build_status_snapshot(request.session_id, "Provider setup required", AssistantShellSessionMode::Concise);
+        if (combined.find("operator_query=failed\nmessage=no_provider_configured") != std::string::npos) {
+            exec_summary.resolution_path = "constrained_intent_routing";
+            exec_summary.selected_route = "provider_unavailable";
+            exec_summary.confidence = 0.0;
+            exec_summary.confirmation_required = false;
+            exec_summary.explanation = "Natural-language interpretation needs provider transport, so the shell returned a remediation path instead.";
+            AssistantShellMessage assistant{"assistant-" + now_string(),
+                                            "assistant",
+                                            {{AssistantShellMessageBlockType::AssistantResponse, "I can still run exact commands, but provider-backed interpretation is not configured yet. Configure a provider to enable broader routing.", false, std::nullopt, std::nullopt, std::nullopt},
+                                             {AssistantShellMessageBlockType::ExecutionSummary, "Thinking (Extended)", true, exec_summary, std::nullopt, std::nullopt}}};
+            auto status = build_status_snapshot(request.session_id, "Provider setup required", AssistantShellSessionMode::Concise);
+            append_and_persist(assistant, status, std::nullopt);
+            emit_shell_diagnostic("assistant_shell_provider_result_parsed", "provider_unavailable");
+            return {true, request.session_id, {messages.back()}, status, build_tool_panel_sections(), std::nullopt, request.attachments, load_provider_operational_state(request.session_id)};
+        }
+
+        if (command_result.exit_code == 0 && combined.find("operator_query=failed") == std::string::npos) {
+            exec_summary.resolution_path = exec_summary.provider_used ? "constrained_intent_routing" : "exact_command_resolution";
+            exec_summary.selected_route = sanitize_shell_field(value_for_key(combined, exec_summary.provider_used ? "matched_command" : "intent_route_command"), 96);
+            if (exec_summary.selected_route.empty()) exec_summary.selected_route = sanitize_shell_field(value_for_key(combined, "matched_command"), 96);
+            std::string failure_classification;
+            if (exec_summary.provider_used && exec_summary.selected_route.empty()) failure_classification = "provider_output_incomplete";
+
+            const auto confidence_text = value_for_key(combined, "confidence");
+            if (exec_summary.provider_used && !try_parse_confidence(confidence_text, exec_summary.confidence)) {
+                if (failure_classification.empty()) failure_classification = "provider_output_invalid";
+            } else if (!exec_summary.provider_used) {
+                exec_summary.confidence = 1.0;
+            }
+
+            const auto requires_confirmation_text = value_for_key(combined, "requires_confirmation");
+            if (exec_summary.provider_used && !try_parse_bool(requires_confirmation_text, exec_summary.confirmation_required) && !requires_confirmation_text.empty()) {
+                if (failure_classification.empty()) failure_classification = "provider_output_invalid";
+            }
+
+            exec_summary.explanation = exec_summary.provider_used ? sanitize_shell_field(value_for_key(combined, "reasoning_summary")) : "The shell matched an exact command or alias through the authoritative helper surface first.";
+            if (exec_summary.provider_used && exec_summary.explanation.empty()) exec_summary.explanation = "Provider output omitted a reasoning summary.";
+
+            auto closest_commands = parse_closest_commands(value_for_key(combined, "closest_commands"));
+            for (const auto& command : closest_commands) exec_summary.artifact_refreshes.push_back("closest_command:" + command);
+            for (const auto& field : parse_kv_pairs(combined)) {
+                if (starts_with(field.first, "refreshed_artifact_type")) exec_summary.artifact_refreshes.push_back(sanitize_shell_field(field.second, 64));
+            }
+
+            const auto user_message = sanitize_shell_field(value_for_key(combined, "user_facing_message"), 320);
+            const auto canonical = sanitize_shell_field(value_for_key(combined, "canonical_command"), 96);
+            const auto args_text = value_for_key(combined, "args");
+            const auto response_text = !user_message.empty() ? user_message : (!canonical.empty() ? "Completed " + canonical + "." : exec_summary.provider_used ? "The provider returned an incomplete shell response." : "Completed the requested action.");
+
+            if (exec_summary.provider_used && user_message.empty() && failure_classification.empty()) failure_classification = "provider_output_incomplete";
+            const auto mode = sanitize_shell_field(value_for_key(combined, "mode"), 32);
+            if (exec_summary.provider_used && !mode.empty() && mode != "proposed" && mode != "failure") {
+                if (failure_classification.empty()) failure_classification = "provider_output_unrecognized";
+            }
+
+            if (!failure_classification.empty()) {
+                auto provider_state = load_provider_operational_state(request.session_id);
+                provider_state.last_provider_test_state = exec_summary.provider_used ? "provider_output_rejected" : provider_state.last_provider_test_state;
+                provider_state.last_provider_remediation_guidance_state = failure_classification;
+                provider_state.last_configured_active_provider_summary = sanitize_shell_field(value_for_key(combined, "provider_request_provider_name"), 96);
+                auto assistant = make_failure_message("assistant-" + now_string(),
+                                                      response_text,
+                                                      failure_classification,
+                                                      "The live provider result could not be safely normalized, so the shell rendered a stable failure instead of continuing.",
+                                                      exec_summary.provider_used);
+                auto status = build_status_snapshot(request.session_id, "Provider output needs review", AssistantShellSessionMode::Concise);
+                append_and_persist(assistant, status, std::nullopt, provider_state);
+                emit_shell_diagnostic("assistant_shell_submit_failed", failure_classification);
+                return {false, request.session_id, {messages.back()}, status, build_tool_panel_sections(), std::nullopt, request.attachments, provider_state};
+            }
+
+            emit_shell_diagnostic("assistant_shell_provider_result_parsed", exec_summary.selected_route);
+            AssistantShellMessage assistant{"assistant-" + now_string(), "assistant", {}};
+            assistant.blocks.push_back({AssistantShellMessageBlockType::AssistantResponse, response_text, false, std::nullopt, std::nullopt, std::nullopt});
+
+            std::optional<PendingConfirmationState> pending;
+            std::optional<AssistantShellConfirmationRequest> confirmation;
+            if (exec_summary.confirmation_required) {
+                auto args = parse_command_args(args_text);
+                if (!args.empty()) {
+                    pending = PendingConfirmationState{"confirm-" + now_string(), args, exec_summary.selected_route};
+                    confirmation = AssistantShellConfirmationRequest{pending->confirmation_id,
+                                                                    "Confirm action",
+                                                                    response_text,
+                                                                    pending->execution_args,
+                                                                    pending->lineage};
+                    assistant.blocks.push_back({AssistantShellMessageBlockType::Confirmation, "Confirmation required before execution.", false, std::nullopt, confirmation, std::nullopt});
+                    emit_shell_diagnostic("assistant_shell_confirmation_created", exec_summary.selected_route);
+                } else {
+                    exec_summary.confirmation_required = false;
+                }
+            }
+            assistant.blocks.push_back({AssistantShellMessageBlockType::ExecutionSummary, "Thinking (Extended)", true, exec_summary, std::nullopt, std::nullopt});
+            if (const auto provider_card = build_artifact_card("provider_config_summary"); provider_card.has_value()) {
+                if (exec_summary.selected_route == "integration-set-provider" || exec_summary.selected_route == "integration-list-providers" || combined.find("provider_name=") != std::string::npos) {
+                    assistant.blocks.push_back({AssistantShellMessageBlockType::ArtifactCard, provider_card->title, false, std::nullopt, std::nullopt, *provider_card});
+                }
+            }
+
+            auto status = build_status_snapshot(request.session_id, exec_summary.confirmation_required ? "Awaiting confirmation" : "Completed", AssistantShellSessionMode::Concise);
+            if (pending.has_value()) status.pending_confirmation_count = 1;
+            auto provider_state = load_provider_operational_state(request.session_id);
+            provider_state.last_provider_test_state = exec_summary.provider_used ? "provider_transport_used" : provider_state.last_provider_test_state;
+            provider_state.last_provider_remediation_guidance_state = exec_summary.provider_used ? std::string{} : "exact_command_or_remediation";
+            provider_state.last_configured_active_provider_summary = sanitize_shell_field(value_for_key(combined, "provider_request_provider_name"), 96);
+            append_and_persist(assistant, status, pending, provider_state);
+            return {true, request.session_id, {messages.back()}, status, build_tool_panel_sections(), confirmation, request.attachments, provider_state};
+        }
+
+        auto assistant = make_failure_message("assistant-" + now_string(),
+                                              "I couldn't complete that request. Try an exact command, an alias, or open Help for command discovery.",
+                                              "provider_output_unrecognized",
+                                              "No exact command or supported interpreted route could be completed.",
+                                              combined.find("provider_request_provider_name=") != std::string::npos);
+        auto status = build_status_snapshot(request.session_id, "Needs clarification", AssistantShellSessionMode::Concise);
         append_and_persist(assistant, status, std::nullopt);
-        return {true, request.session_id, {messages.back()}, status, build_tool_panel_sections(), std::nullopt, request.attachments, load_provider_operational_state(request.session_id)};
+        emit_shell_diagnostic("assistant_shell_submit_failed", "provider_output_unrecognized");
+        return {false, request.session_id, {messages.back()}, status, build_tool_panel_sections(), std::nullopt, request.attachments, load_provider_operational_state(request.session_id)};
+    } catch (const std::exception& ex) {
+        emit_shell_diagnostic("assistant_shell_submit_failed", ex.what());
+        auto assistant = make_failure_message("assistant-" + now_string(),
+                                              "The assistant shell hit an internal error while processing that request.",
+                                              "provider_output_invalid",
+                                              ex.what(),
+                                              false);
+        auto status = build_status_snapshot(request.session_id, "Submission failed", AssistantShellSessionMode::Concise);
+        append_and_persist(assistant, status, std::nullopt);
+        return {false, request.session_id, {messages.back()}, status, build_tool_panel_sections(), std::nullopt, request.attachments, load_provider_operational_state(request.session_id)};
+    } catch (...) {
+        emit_shell_diagnostic("assistant_shell_submit_failed", "unknown_exception");
+        auto assistant = make_failure_message("assistant-" + now_string(),
+                                              "The assistant shell hit an unknown internal error while processing that request.",
+                                              "provider_output_invalid",
+                                              "unknown_exception",
+                                              false);
+        auto status = build_status_snapshot(request.session_id, "Submission failed", AssistantShellSessionMode::Concise);
+        append_and_persist(assistant, status, std::nullopt);
+        return {false, request.session_id, {messages.back()}, status, build_tool_panel_sections(), std::nullopt, request.attachments, load_provider_operational_state(request.session_id)};
     }
-
-    if (command_result.exit_code == 0 && combined.find("operator_query=failed") == std::string::npos) {
-        exec_summary.resolution_path = combined.find("provider_request_provider_name=") != std::string::npos ? "constrained_intent_routing" : "exact_command_resolution";
-        exec_summary.selected_route = value_for_key(combined, exec_summary.provider_used ? "matched_command" : "intent_route_command");
-        if (exec_summary.selected_route.empty()) exec_summary.selected_route = value_for_key(combined, "matched_command");
-        exec_summary.confidence = exec_summary.provider_used ? std::stod(value_for_key(combined, "confidence").empty() ? "0.0" : value_for_key(combined, "confidence")) : 1.0;
-        exec_summary.confirmation_required = value_for_key(combined, "requires_confirmation") == "true";
-        exec_summary.explanation = exec_summary.provider_used ? value_for_key(combined, "reasoning_summary") : "The shell matched an exact command or alias through the authoritative helper surface first.";
-        for (const auto& field : parse_kv_pairs(combined)) {
-            if (starts_with(field.first, "refreshed_artifact_type")) exec_summary.artifact_refreshes.push_back(field.second);
-        }
-
-        const auto user_message = value_for_key(combined, "user_facing_message");
-        const auto canonical = value_for_key(combined, "canonical_command");
-        const auto response_text = !user_message.empty() ? user_message : (!canonical.empty() ? "Completed " + canonical + "." : "Completed the requested action.");
-        AssistantShellMessage assistant{"assistant-" + now_string(), "assistant", {}};
-        assistant.blocks.push_back({AssistantShellMessageBlockType::AssistantResponse, response_text, false, std::nullopt, std::nullopt, std::nullopt});
-
-        std::optional<PendingConfirmationState> pending;
-        std::optional<AssistantShellConfirmationRequest> confirmation;
-        if (exec_summary.confirmation_required) {
-            std::vector<std::string> args;
-            std::istringstream in(value_for_key(combined, "args"));
-            std::string token;
-            while (in >> token) args.push_back(token);
-            if (!args.empty()) {
-                pending = PendingConfirmationState{"confirm-" + now_string(), args, exec_summary.selected_route};
-                confirmation = AssistantShellConfirmationRequest{pending->confirmation_id,
-                                                                "Confirm action",
-                                                                response_text,
-                                                                pending->execution_args,
-                                                                pending->lineage};
-                assistant.blocks.push_back({AssistantShellMessageBlockType::Confirmation, "Confirmation required before execution.", false, std::nullopt, confirmation, std::nullopt});
-            }
-        }
-        assistant.blocks.push_back({AssistantShellMessageBlockType::ExecutionSummary, "Thinking (Extended)", true, exec_summary, std::nullopt, std::nullopt});
-        if (const auto provider_card = build_artifact_card("provider_config_summary"); provider_card.has_value()) {
-            if (exec_summary.selected_route == "integration-set-provider" || exec_summary.selected_route == "integration-list-providers" || combined.find("provider_name=") != std::string::npos) {
-                assistant.blocks.push_back({AssistantShellMessageBlockType::ArtifactCard, provider_card->title, false, std::nullopt, std::nullopt, *provider_card});
-            }
-        }
-
-        auto status = build_status_snapshot(request.session_id, exec_summary.confirmation_required ? "Awaiting confirmation" : "Completed", AssistantShellSessionMode::Concise);
-        if (pending.has_value()) status.pending_confirmation_count = 1;
-        auto provider_state = load_provider_operational_state(request.session_id);
-        provider_state.last_provider_test_state = exec_summary.provider_used ? "provider_transport_used" : provider_state.last_provider_test_state;
-        provider_state.last_provider_remediation_guidance_state = exec_summary.provider_used ? std::string{} : "exact_command_or_remediation";
-        provider_state.last_configured_active_provider_summary = value_for_key(combined, "provider_request_provider_name");
-        messages.push_back(assistant);
-        summary.updated_at = now_string();
-        if (summary.title == "Assistant Session") summary.title = default_session_title(request.user_text);
-        persist_session(summary, messages, status, pending, {request.attachments}, provider_state);
-        return {true, request.session_id, {messages.back()}, status, build_tool_panel_sections(), confirmation, request.attachments, provider_state};
-    }
-
-    exec_summary.resolution_path = "deterministic_fallback";
-    exec_summary.selected_route = "unmatched";
-    exec_summary.confidence = 0.0;
-    exec_summary.explanation = "No exact command or supported interpreted route could be completed.";
-    AssistantShellMessage assistant{"assistant-" + now_string(),
-                                    "assistant",
-                                    {{AssistantShellMessageBlockType::AssistantResponse, "I couldn't complete that request. Try an exact command, an alias, or open Help for command discovery.", false, std::nullopt, std::nullopt, std::nullopt},
-                                     {AssistantShellMessageBlockType::ExecutionSummary, "Thinking (Extended)", true, exec_summary, std::nullopt, std::nullopt}}};
-    auto status = build_status_snapshot(request.session_id, "Needs clarification", AssistantShellSessionMode::Concise);
-    append_and_persist(assistant, status, std::nullopt);
-    return {false, request.session_id, {messages.back()}, status, build_tool_panel_sections(), std::nullopt, request.attachments, load_provider_operational_state(request.session_id)};
 }
 
 AssistantShellConfirmationResult AssistantShellSurfaceService::ResolveConfirmation(const std::string& session_id,
