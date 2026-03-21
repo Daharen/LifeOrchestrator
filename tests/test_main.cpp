@@ -1441,6 +1441,10 @@ void test_assistant_shell_live_provider_degrades_gracefully_for_invalid_routes()
             assert_true(block.execution_summary->raw_matched_command == "procedural-upsert-activity", "shell should expose raw matched command diagnostics");
             assert_true(block.execution_summary->normalized_matched_command == "procedural-upsert-activity", "shell should expose normalized matched command diagnostics");
             assert_true(block.execution_summary->route_acceptance_result == "accepted_proposed", "shell should expose route acceptance diagnostics");
+            assert_true(block.execution_summary->effective_canonical_provider_name == "openai", "shell should expose effective canonical provider diagnostics");
+            assert_true(block.execution_summary->effective_model_name == "gpt-5", "shell should expose effective model diagnostics");
+            assert_true(block.execution_summary->effective_secret_source == "direct", "shell should expose effective secret-source diagnostics");
+            assert_true(block.execution_summary->effective_data_root == root.string(), "shell should expose effective data-root diagnostics");
         }
     }
     assert_true(saw_ok_diagnostics, "successful live provider shell requests should include extended diagnostics");
@@ -1700,6 +1704,80 @@ void test_provider_setup_service_round_trip_modes() {
     assert_true(existing_provider != nullptr && existing_provider->env_var_name == "unset", "existing-mode provider should leave env-var metadata unset");
 }
 
+
+void test_provider_name_canonicalization_lookup_and_replacement() {
+    const std::filesystem::path root = "artifacts/provider_canonicalization";
+    std::filesystem::remove_all(root);
+    setenv("OPENAI_CANONICAL_KEY", "CANONICAL_ENV_KEY_123", 1);
+
+    std::ostringstream out;
+    std::ostringstream err;
+    auto rc = life_orchestrator::app::run_application({"integration-set-provider", "--data-root=" + root.string(), "--quiet-startup", "--provider-name", "OpenAI", "--api-key", "TEST_KEY_123", "--model-name", "gpt-5"}, out, err, "", std::filesystem::current_path());
+    assert_true(rc == 0, "saving OpenAI variant should succeed");
+    assert_true(std::filesystem::exists(root / "config" / "providers" / "openai.secret"), "canonical save should use canonical secret filename");
+    assert_true(!std::filesystem::exists(root / "config" / "providers" / "OpenAI.secret"), "canonical save should not create variant-cased secret filename");
+
+    out.str(""); out.clear(); err.str(""); err.clear();
+    rc = life_orchestrator::app::run_application({"integration-show-provider", "--data-root=" + root.string(), "--quiet-startup", "--provider-name", "openai"}, out, err, "", std::filesystem::current_path());
+    assert_true(rc == 0, "showing canonical provider after variant save should succeed");
+    assert_true(out.str().find("provider_name=openai") != std::string::npos, "show should emit canonical provider name");
+    assert_true(out.str().find("effective_data_root=" + root.string()) != std::string::npos, "show should expose effective data root");
+
+    out.str(""); out.clear(); err.str(""); err.clear();
+    rc = life_orchestrator::app::run_application({"integration-show-provider", "--data-root=" + root.string(), "--quiet-startup", "--provider-name", "OpenAI"}, out, err, "", std::filesystem::current_path());
+    assert_true(rc == 0, "showing variant provider after canonical save should succeed");
+    assert_true(out.str().find("provider_name=openai") != std::string::npos, "variant lookup should resolve canonical provider record");
+
+    out.str(""); out.clear(); err.str(""); err.clear();
+    rc = life_orchestrator::app::run_application({"integration-set-provider", "--data-root=" + root.string(), "--quiet-startup", "--provider-name", "openai", "--model-name", "gpt-5.1", "--secret-source", "env", "--env-var", "OPENAI_CANONICAL_KEY", "--display-name", "OpenAI Env"}, out, err, "", std::filesystem::current_path());
+    assert_true(rc == 0, "canonical env-backed overwrite should succeed");
+    assert_true(out.str().find("provider_name=openai") != std::string::npos, "save output should emit canonical provider name");
+    assert_true(out.str().find("secret_source=env") != std::string::npos, "env-backed overwrite should emit env secret source");
+
+    out.str(""); out.clear(); err.str(""); err.clear();
+    rc = life_orchestrator::app::run_application({"integration-show-provider", "--data-root=" + root.string(), "--quiet-startup", "--provider-name", "OpenAI"}, out, err, "", std::filesystem::current_path());
+    assert_true(rc == 0, "variant lookup after replacement should still succeed");
+    const auto show_text = out.str();
+    assert_true(show_text.find("secret_source=env") != std::string::npos, "canonical active record should now be env-backed");
+    assert_true(show_text.find("env_var_name=OPENAI_CANONICAL_KEY") != std::string::npos, "canonical active record should keep env var name");
+    assert_true(show_text.find("credential_storage_mode=InlinePlaceholderOnly") != std::string::npos, "canonical active record should switch to env storage mode");
+    assert_true(show_text.find("model_name=gpt-5.1") != std::string::npos, "canonical active record should keep newest model");
+    assert_true(show_text.find("display_name=OpenAI Env") != std::string::npos, "canonical active record should keep newest display name");
+
+    out.str(""); out.clear(); err.str(""); err.clear();
+    rc = life_orchestrator::app::run_application({"integration-test-provider", "--data-root=" + root.string(), "--quiet-startup", "--provider-name", "OpenAI"}, out, err, "", std::filesystem::current_path());
+    assert_true(rc != 0 || out.str().find("integration_test_provider=ok") != std::string::npos, "variant readiness lookup should resolve the canonical env-backed provider record");
+    const auto readiness_text = out.str() + err.str();
+    assert_true(readiness_text.find("provider_name=openai") != std::string::npos, "readiness lookup should resolve the canonical provider name");
+    assert_true(readiness_text.find("secret_source=env") != std::string::npos, "readiness output should expose effective secret source");
+    assert_true(readiness_text.find("effective_data_root=" + root.string()) != std::string::npos, "readiness output should expose effective data root");
+}
+
+void test_operator_query_prefers_newest_enabled_canonical_provider() {
+    const std::filesystem::path root = "artifacts/operator_query_canonical_provider_selection";
+    std::filesystem::remove_all(root);
+    setenv("OPENAI_OPERATOR_KEY", "OPERATOR_ENV_KEY_456", 1);
+
+    std::ostringstream out;
+    std::ostringstream err;
+    auto rc = life_orchestrator::app::run_application({"integration-set-provider", "--data-root=" + root.string(), "--quiet-startup", "--provider-name", "OpenAI", "--api-key", "TEST_KEY_123", "--model-name", "gpt-5"}, out, err, "", std::filesystem::current_path());
+    assert_true(rc == 0, "legacy-cased direct provider seed should succeed");
+    rc = life_orchestrator::app::run_application({"integration-set-provider", "--data-root=" + root.string(), "--quiet-startup", "--provider-name", "openai", "--model-name", "gpt-5.1", "--secret-source", "env", "--env-var", "OPENAI_OPERATOR_KEY", "--display-name", "OpenAI Operator Env"}, out, err, "", std::filesystem::current_path());
+    assert_true(rc == 0, "newer canonical env provider should succeed");
+    rc = life_orchestrator::app::run_application({"integration-set-provider", "--data-root=" + root.string(), "--quiet-startup", "--provider-name", "stub", "--api-key", "TEST_KEY_123", "--model-name", "gpt-5"}, out, err, "", std::filesystem::current_path());
+    assert_true(rc == 0, "secondary provider seed should succeed");
+
+    out.str(""); out.clear(); err.str(""); err.clear();
+    rc = life_orchestrator::app::run_application({"operator-query", "--data-root=" + root.string(), "--quiet-startup", "--input", "create a weekly laundry task"}, out, err, "", std::filesystem::current_path());
+    assert_true(rc == 0 || rc == 2, "operator-query should route through the active canonical openai provider even if transport readiness fails in this environment");
+    const auto text_out = out.str();
+    assert_true(text_out.find("provider_request_provider_name=openai") != std::string::npos, "operator-query should expose canonical provider name");
+    assert_true(text_out.find("provider_request_canonical_provider_name=openai") != std::string::npos, "operator-query should expose effective canonical provider name");
+    assert_true(text_out.find("provider_request_model_name=gpt-5.1") != std::string::npos, "operator-query should use the newest canonical provider model");
+    assert_true(text_out.find("provider_request_secret_source=env") != std::string::npos, "operator-query should use env-backed secret source after replacement");
+    assert_true(text_out.find("effective_data_root=" + root.string()) != std::string::npos, "operator-query should expose effective data root");
+}
+
 void test_openai_transport_failure_and_registry_behavior() {
     using namespace life_orchestrator::integration::inference;
     auto fake = std::make_shared<FakeHttpExecutor>();
@@ -1867,6 +1945,8 @@ int main() {
         test_inference_transport_contracts_and_redaction();
         test_provider_validation_paths_and_setup_service();
         test_provider_setup_service_round_trip_modes();
+        test_provider_name_canonicalization_lookup_and_replacement();
+        test_operator_query_prefers_newest_enabled_canonical_provider();
         test_provider_setup_controller_round_trip();
         test_openai_transport_failure_and_registry_behavior();
         test_openai_transport_diagnostic_matrix();

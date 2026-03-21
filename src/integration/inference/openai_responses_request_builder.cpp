@@ -70,9 +70,14 @@ std::string default_openai_responses_endpoint() {
     return "https://api.openai.com/v1/responses";
 }
 
-bool is_openai_like_provider_name(const std::string& provider_name) {
+std::string canonical_provider_name(const std::string& provider_name) {
     const auto lowered = lower_copy(provider_name);
-    return lowered == "openai" || lowered == "open-ai" || lowered == "openai-responses";
+    if (lowered == "openai" || lowered == "open-ai" || lowered == "openai-responses") return "openai";
+    return lowered;
+}
+
+bool is_openai_like_provider_name(const std::string& provider_name) {
+    return canonical_provider_name(provider_name) == "openai";
 }
 
 HttpRequestSpec build_openai_responses_request(const InferenceTransportRequest& request) {

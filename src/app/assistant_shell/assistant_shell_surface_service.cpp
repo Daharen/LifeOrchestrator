@@ -463,6 +463,10 @@ AssistantShellSubmissionResult AssistantShellSurfaceService::SubmitUserText(cons
             exec_summary.normalized_matched_command = sanitize_shell_field(value_for_key(combined, "normalized_matched_command"), 96);
             exec_summary.route_acceptance_result = sanitize_shell_field(value_for_key(combined, "route_acceptance_result"), 96);
             exec_summary.route_rejection_reason = sanitize_shell_field(value_for_key(combined, "route_rejection_reason"), 96);
+            exec_summary.effective_canonical_provider_name = sanitize_shell_field(value_for_key(combined, "provider_request_canonical_provider_name"), 96);
+            exec_summary.effective_model_name = sanitize_shell_field(value_for_key(combined, "provider_request_model_name"), 96);
+            exec_summary.effective_secret_source = sanitize_shell_field(value_for_key(combined, "provider_request_secret_source"), 96);
+            exec_summary.effective_data_root = sanitize_shell_field(value_for_key(combined, "effective_data_root"), 180);
 
             const auto confidence_text = value_for_key(combined, "normalized_confidence");
             if (exec_summary.provider_used && !try_parse_confidence(confidence_text, exec_summary.confidence)) {
@@ -480,6 +484,10 @@ AssistantShellSubmissionResult AssistantShellSurfaceService::SubmitUserText(cons
                                            ? sanitize_shell_field("raw_mode=" + exec_summary.raw_mode + "; normalized_mode=" + exec_summary.normalized_mode +
                                                                       "; raw_command=" + exec_summary.raw_matched_command + "; normalized_command=" + exec_summary.normalized_matched_command +
                                                                       "; acceptance=" + exec_summary.route_acceptance_result +
+                                                                      "; provider=" + exec_summary.effective_canonical_provider_name +
+                                                                      "; model=" + exec_summary.effective_model_name +
+                                                                      "; secret_source=" + exec_summary.effective_secret_source +
+                                                                      "; data_root=" + exec_summary.effective_data_root +
                                                                       (exec_summary.route_rejection_reason.empty() ? std::string{} : "; rejection=" + exec_summary.route_rejection_reason),
                                                                   240)
                                            : "The shell matched an exact command or alias through the authoritative helper surface first.";
