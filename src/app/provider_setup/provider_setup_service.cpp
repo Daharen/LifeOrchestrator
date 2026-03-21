@@ -41,6 +41,7 @@ std::vector<ProviderSetupProviderSummary> ProviderSetupService::ListProviders() 
 ApplicationInvocationResult ProviderSetupService::SaveProvider(const ProviderSetupUpsertRequest& request) const {
     std::vector<std::string> args{"integration-set-provider", "--data-root=" + data_root_.string(), "--quiet-startup", "--provider-name", request.provider_name, "--model-name", request.model_name, "--secret-source", request.secret_source};
     if (!request.display_name.empty()) args.insert(args.end(), {"--display-name", request.display_name});
+    args.insert(args.end(), {"--enabled", request.enabled ? "true" : "false"});
     if (request.secret_source == "env") args.insert(args.end(), {"--env-var", request.env_var_name});
     else if (request.secret_source == "existing") args.insert(args.end(), {"--secret-ref", request.existing_secret_reference});
     else args.insert(args.end(), {"--api-key", request.api_key});

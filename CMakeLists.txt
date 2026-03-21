@@ -46,6 +46,7 @@ add_library(lifeorchestrator_app_support
     src/app/assistant_shell/assistant_shell_surface_service.cpp
     src/app/provider_setup/provider_setup_contracts.cpp
     src/app/provider_setup/provider_setup_service.cpp
+    src/ui/provider_setup/provider_setup_controller.cpp
     src/intelligence/intent_router.cpp
     src/ui/assistant_shell/assistant_shell_composer_input.cpp
     src/app/app_support/action_form_registry.cpp
