@@ -17,6 +17,9 @@ public:
 
     AssistantShellStartupSnapshot StartOrResumeSession(const std::optional<std::string>& session_id = std::nullopt);
     AssistantShellSubmissionResult SubmitUserText(const AssistantShellSubmissionRequest& request);
+    AssistantShellPendingAttachmentState AddAttachment(const AssistantShellAttachmentAddRequest& request);
+    AssistantShellPendingAttachmentState RemoveAttachment(const AssistantShellAttachmentRemoveRequest& request);
+    AssistantShellPendingAttachmentState LoadPendingAttachments(const std::string& session_id) const;
     AssistantShellConfirmationResult ResolveConfirmation(const std::string& session_id,
                                                          const std::string& confirmation_id,
                                                          bool accepted);
@@ -46,8 +49,11 @@ private:
     void persist_session(const AssistantShellSessionSummary& summary,
                          const std::vector<AssistantShellMessage>& messages,
                          const AssistantShellStatusSnapshot& status,
-                         const std::optional<PendingConfirmationState>& pending_confirmation) const;
+                         const std::optional<PendingConfirmationState>& pending_confirmation,
+                         const AssistantShellPendingAttachmentState& attachments,
+                         const AssistantShellProviderOperationalState& provider_state) const;
     std::optional<PendingConfirmationState> load_pending_confirmation(const std::string& session_id) const;
+    AssistantShellProviderOperationalState load_provider_operational_state(const std::string& session_id) const;
     std::string next_session_id() const;
     std::string now_string() const;
     std::string default_session_title(const std::string& first_user_text) const;

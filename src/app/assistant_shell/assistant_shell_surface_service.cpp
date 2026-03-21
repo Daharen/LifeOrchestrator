@@ -158,7 +158,9 @@ std::vector<AssistantShellToolPanelSection> AssistantShellSurfaceService::build_
 void AssistantShellSurfaceService::persist_session(const AssistantShellSessionSummary& summary,
                                                    const std::vector<AssistantShellMessage>& messages,
                                                    const AssistantShellStatusSnapshot& status,
-                                                   const std::optional<PendingConfirmationState>& pending_confirmation) const {
+                                                   const std::optional<PendingConfirmationState>& pending_confirmation,
+                                                   const AssistantShellPendingAttachmentState& attachments,
+                                                   const AssistantShellProviderOperationalState& provider_state) const {
     std::filesystem::create_directories(sessions_root());
     std::ofstream out(session_file_path(summary.session_id), std::ios::trunc);
     out << "session_id=" << sanitize_line(summary.session_id) << '\n';
@@ -170,6 +172,15 @@ void AssistantShellSurfaceService::persist_session(const AssistantShellSessionSu
     out << "pending_confirmation_count=" << status.pending_confirmation_count << '\n';
     out << "last_action_status=" << sanitize_line(status.last_action_status) << '\n';
     out << "session_mode=" << to_string(status.session_mode) << '\n';
+    out << "last_provider_test_state=" << sanitize_line(provider_state.last_provider_test_state) << '\n';
+    out << "last_provider_remediation_guidance_state=" << sanitize_line(provider_state.last_provider_remediation_guidance_state) << '\n';
+    out << "last_configured_active_provider_summary=" << sanitize_line(provider_state.last_configured_active_provider_summary) << '\n';
+    for (const auto& attachment : attachments.attachments) {
+        out << "attachment|" << sanitize_line(attachment.local_path) << '|'
+            << sanitize_line(attachment.display_name) << '|'
+            << sanitize_line(attachment.size_bytes) << '|'
+            << sanitize_line(attachment.attachment_state) << '\n';
+    }
     if (pending_confirmation.has_value()) {
         out << "pending_confirmation_id=" << sanitize_line(pending_confirmation->confirmation_id) << '\n';
         out << "pending_confirmation_lineage=" << sanitize_line(pending_confirmation->lineage) << '\n';
@@ -185,6 +196,33 @@ void AssistantShellSurfaceService::persist_session(const AssistantShellSessionSu
             out << "message|" << sanitize_line(message.message_id) << '|' << sanitize_line(message.role) << '|' << to_string(block.type) << '|' << sanitize_line(block.text) << '\n';
         }
     }
+}
+
+AssistantShellPendingAttachmentState AssistantShellSurfaceService::LoadPendingAttachments(const std::string& session_id) const {
+    AssistantShellPendingAttachmentState state;
+    std::ifstream in(session_file_path(session_id));
+    std::string line;
+    while (std::getline(in, line)) {
+        if (!starts_with(line, "attachment|")) continue;
+        std::stringstream input(line);
+        std::string segment;
+        std::vector<std::string> parts;
+        while (std::getline(input, segment, '|')) parts.push_back(segment);
+        if (parts.size() >= 5) state.attachments.push_back({parts[1], parts[2], parts[3], parts[4]});
+    }
+    return state;
+}
+
+AssistantShellProviderOperationalState AssistantShellSurfaceService::load_provider_operational_state(const std::string& session_id) const {
+    AssistantShellProviderOperationalState state;
+    std::ifstream in(session_file_path(session_id));
+    std::string line;
+    while (std::getline(in, line)) {
+        if (starts_with(line, "last_provider_test_state=")) state.last_provider_test_state = line.substr(25);
+        else if (starts_with(line, "last_provider_remediation_guidance_state=")) state.last_provider_remediation_guidance_state = line.substr(39);
+        else if (starts_with(line, "last_configured_active_provider_summary=")) state.last_configured_active_provider_summary = line.substr(38);
+    }
+    return state;
 }
 
 std::vector<AssistantShellMessage> AssistantShellSurfaceService::load_session_messages(const std::string& session_id) const {
@@ -286,10 +324,10 @@ AssistantShellStartupSnapshot AssistantShellSurfaceService::StartOrResumeSession
                  << ", and session mode is " << to_string(status.session_mode) << ".";
         messages.push_back(make_text_message("startup-greeting", "assistant", AssistantShellMessageBlockType::AssistantResponse, greeting.str()));
         messages.push_back(make_text_message("startup-status", "system", AssistantShellMessageBlockType::StatusNotice, "Use the composer to ask for a command, artifact summary, or guided action."));
-        persist_session(summary, messages, status, std::nullopt);
+        persist_session(summary, messages, status, std::nullopt, {}, {});
     }
     if (summary.title == "Assistant Session" && messages.size() > 2) summary.title = "Assistant Session";
-    return {summary, status, {"Ask Life Orchestrator to help with the next step.", true, false}, messages, build_tool_panel_sections()};
+    return {summary, status, {"Ask Life Orchestrator to help with the next step.", true, true}, LoadPendingAttachments(id), load_provider_operational_state(id), messages, build_tool_panel_sections()};
 }
 
 AssistantShellSubmissionResult AssistantShellSurfaceService::SubmitUserText(const AssistantShellSubmissionRequest& request) {
@@ -303,7 +341,7 @@ AssistantShellSubmissionResult AssistantShellSurfaceService::SubmitUserText(cons
         messages.push_back(assistant_message);
         summary.updated_at = now_string();
         if (summary.title == "Assistant Session") summary.title = default_session_title(request.user_text);
-        persist_session(summary, messages, status, pending);
+        persist_session(summary, messages, status, pending, {request.attachments}, load_provider_operational_state(request.session_id));
     };
 
     const auto command_result = invoke_application_command({"operator-query", "--data-root=" + data_root_.string(), "--quiet-startup", "--input", request.user_text}, environment_data_root_, working_root_);
@@ -324,7 +362,7 @@ AssistantShellSubmissionResult AssistantShellSurfaceService::SubmitUserText(cons
                                          {AssistantShellMessageBlockType::ExecutionSummary, "Thinking (Extended)", true, exec_summary, std::nullopt, std::nullopt}}};
         auto status = build_status_snapshot(request.session_id, "Provider setup required", AssistantShellSessionMode::Concise);
         append_and_persist(assistant, status, std::nullopt);
-        return {true, request.session_id, {messages.back()}, status, build_tool_panel_sections(), std::nullopt};
+        return {true, request.session_id, {messages.back()}, status, build_tool_panel_sections(), std::nullopt, request.attachments, load_provider_operational_state(request.session_id)};
     }
 
     if (command_result.exit_code == 0 && combined.find("operator_query=failed") == std::string::npos) {
@@ -370,8 +408,15 @@ AssistantShellSubmissionResult AssistantShellSurfaceService::SubmitUserText(cons
 
         auto status = build_status_snapshot(request.session_id, exec_summary.confirmation_required ? "Awaiting confirmation" : "Completed", AssistantShellSessionMode::Concise);
         if (pending.has_value()) status.pending_confirmation_count = 1;
-        append_and_persist(assistant, status, pending);
-        return {true, request.session_id, {messages.back()}, status, build_tool_panel_sections(), confirmation};
+        auto provider_state = load_provider_operational_state(request.session_id);
+        provider_state.last_provider_test_state = exec_summary.provider_used ? "provider_transport_used" : provider_state.last_provider_test_state;
+        provider_state.last_provider_remediation_guidance_state = exec_summary.provider_used ? std::string{} : "exact_command_or_remediation";
+        provider_state.last_configured_active_provider_summary = value_for_key(combined, "provider_request_provider_name");
+        messages.push_back(assistant);
+        summary.updated_at = now_string();
+        if (summary.title == "Assistant Session") summary.title = default_session_title(request.user_text);
+        persist_session(summary, messages, status, pending, {request.attachments}, provider_state);
+        return {true, request.session_id, {messages.back()}, status, build_tool_panel_sections(), confirmation, request.attachments, provider_state};
     }
 
     exec_summary.resolution_path = "deterministic_fallback";
@@ -384,7 +429,7 @@ AssistantShellSubmissionResult AssistantShellSurfaceService::SubmitUserText(cons
                                      {AssistantShellMessageBlockType::ExecutionSummary, "Thinking (Extended)", true, exec_summary, std::nullopt, std::nullopt}}};
     auto status = build_status_snapshot(request.session_id, "Needs clarification", AssistantShellSessionMode::Concise);
     append_and_persist(assistant, status, std::nullopt);
-    return {false, request.session_id, {messages.back()}, status, build_tool_panel_sections(), std::nullopt};
+    return {false, request.session_id, {messages.back()}, status, build_tool_panel_sections(), std::nullopt, request.attachments, load_provider_operational_state(request.session_id)};
 }
 
 AssistantShellConfirmationResult AssistantShellSurfaceService::ResolveConfirmation(const std::string& session_id,
@@ -410,8 +455,30 @@ AssistantShellConfirmationResult AssistantShellSurfaceService::ResolveConfirmati
     messages.push_back({"assistant-confirm-" + now_string(), "assistant", {{AssistantShellMessageBlockType::AssistantResponse, assistant_message, false, std::nullopt, std::nullopt, std::nullopt}, {AssistantShellMessageBlockType::ExecutionSummary, "Thinking (Extended)", true, exec_summary, std::nullopt, std::nullopt}}});
     summary.updated_at = now_string();
     auto status = build_status_snapshot(session_id, accepted ? "Confirmed" : "Cancelled", AssistantShellSessionMode::Concise);
-    persist_session(summary, messages, status, std::nullopt);
+    persist_session(summary, messages, status, std::nullopt, LoadPendingAttachments(session_id), load_provider_operational_state(session_id));
     return {accepted, confirmation_id, assistant_message, exec_summary};
+}
+
+AssistantShellPendingAttachmentState AssistantShellSurfaceService::AddAttachment(const AssistantShellAttachmentAddRequest& request) {
+    auto summary = make_session_summary(request.session_id);
+    auto messages = load_session_messages(request.session_id);
+    auto status = LoadLastStatus(request.session_id).value_or(build_status_snapshot(request.session_id, "Ready", AssistantShellSessionMode::Concise));
+    auto attachments = LoadPendingAttachments(request.session_id);
+    attachments.attachments.push_back({request.local_path, request.display_name.empty() ? request.local_path : request.display_name, request.size_bytes, "attached"});
+    persist_session(summary, messages, status, load_pending_confirmation(request.session_id), attachments, load_provider_operational_state(request.session_id));
+    return attachments;
+}
+
+AssistantShellPendingAttachmentState AssistantShellSurfaceService::RemoveAttachment(const AssistantShellAttachmentRemoveRequest& request) {
+    auto summary = make_session_summary(request.session_id);
+    auto messages = load_session_messages(request.session_id);
+    auto status = LoadLastStatus(request.session_id).value_or(build_status_snapshot(request.session_id, "Ready", AssistantShellSessionMode::Concise));
+    auto attachments = LoadPendingAttachments(request.session_id);
+    attachments.attachments.erase(std::remove_if(attachments.attachments.begin(), attachments.attachments.end(),
+                                                 [&](const auto& item) { return item.local_path == request.local_path; }),
+                                  attachments.attachments.end());
+    persist_session(summary, messages, status, load_pending_confirmation(request.session_id), attachments, load_provider_operational_state(request.session_id));
+    return attachments;
 }
 
 }  // namespace life_orchestrator::app::assistant_shell

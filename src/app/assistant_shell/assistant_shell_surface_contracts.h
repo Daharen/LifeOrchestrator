@@ -88,6 +88,36 @@ struct AssistantShellToolPanelSection {
     std::vector<AssistantShellToolPanelItem> items;
 };
 
+
+struct AssistantShellAttachmentReference {
+    std::string local_path;
+    std::string display_name;
+    std::string size_bytes;
+    std::string attachment_state;
+};
+
+struct AssistantShellPendingAttachmentState {
+    std::vector<AssistantShellAttachmentReference> attachments;
+};
+
+struct AssistantShellAttachmentAddRequest {
+    std::string session_id;
+    std::string local_path;
+    std::string display_name;
+    std::string size_bytes;
+};
+
+struct AssistantShellAttachmentRemoveRequest {
+    std::string session_id;
+    std::string local_path;
+};
+
+struct AssistantShellProviderOperationalState {
+    std::string last_provider_test_state;
+    std::string last_provider_remediation_guidance_state;
+    std::string last_configured_active_provider_summary;
+};
+
 struct AssistantShellComposerState {
     std::string placeholder_text;
     bool can_submit = true;
@@ -106,6 +136,8 @@ struct AssistantShellStartupSnapshot {
     AssistantShellSessionSummary session;
     AssistantShellStatusSnapshot status;
     AssistantShellComposerState composer;
+    AssistantShellPendingAttachmentState pending_attachments;
+    AssistantShellProviderOperationalState provider_state;
     std::vector<AssistantShellMessage> initial_messages;
     std::vector<AssistantShellToolPanelSection> tool_panel_sections;
 };
@@ -113,6 +145,7 @@ struct AssistantShellStartupSnapshot {
 struct AssistantShellSubmissionRequest {
     std::string session_id;
     std::string user_text;
+    std::vector<AssistantShellAttachmentReference> attachments;
 };
 
 struct AssistantShellSubmissionResult {
@@ -122,6 +155,8 @@ struct AssistantShellSubmissionResult {
     AssistantShellStatusSnapshot status;
     std::vector<AssistantShellToolPanelSection> tool_panel_sections;
     std::optional<AssistantShellConfirmationRequest> pending_confirmation;
+    AssistantShellPendingAttachmentState pending_attachments;
+    AssistantShellProviderOperationalState provider_state;
 };
 
 std::string to_string(AssistantShellMessageBlockType type);
