@@ -30,10 +30,14 @@ std::vector<ProviderSetupProviderSummary> ProviderSetupService::ListProviders() 
             if (!current.provider_name.empty()) providers.push_back(current);
             current = {};
             current.provider_name = line.substr(14);
-        } else if (line.rfind("enabled=", 0) == 0) current.enabled = line.substr(8) == "true";
+        } else if (line.rfind("display_name=", 0) == 0) current.display_name = line.substr(13);
+        else if (line.rfind("enabled=", 0) == 0) current.enabled = line.substr(8) == "true";
         else if (line.rfind("status=", 0) == 0) current.status = line.substr(7);
         else if (line.rfind("model_name=", 0) == 0) current.model_name = line.substr(11);
         else if (line.rfind("secret_source=", 0) == 0) current.secret_source = line.substr(14);
+        else if (line.rfind("env_var_name=", 0) == 0) current.env_var_name = line.substr(13);
+        else if (line.rfind("existing_secret_reference=", 0) == 0) current.existing_secret_reference = line.substr(26);
+        else if (line.rfind("credential_reference=", 0) == 0) current.credential_reference = line.substr(21);
         else if (line.rfind("api_key_redacted=", 0) == 0) current.redacted_secret_status = line.substr(17);
     }
     if (!current.provider_name.empty()) providers.push_back(current);

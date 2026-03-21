@@ -26,6 +26,7 @@ private:
     void Layout();
     void RefreshProviders();
     void PopulateFromSelection();
+    void UpdateSecretSourceUi();
     void SaveCurrentProvider();
     void TestCurrentProvider();
     void SetStatusText(const std::string& text);

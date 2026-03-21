@@ -147,6 +147,7 @@ LRESULT ProviderSetupWindow::HandleMessage(UINT message, WPARAM w_param, LPARAM 
             if (id == kControlTest && code == BN_CLICKED) { TestCurrentProvider(); return 0; }
             if (id == kControlClose && code == BN_CLICKED) { DestroyWindow(hwnd_); return 0; }
             if (id == kControlProviderList && code == LBN_SELCHANGE) { PopulateFromSelection(); return 0; }
+            if (id == kControlSecretSource && code == CBN_SELCHANGE) { UpdateSecretSourceUi(); return 0; }
             return 0;
         }
         case WM_CLOSE: DestroyWindow(hwnd_); return 0;
@@ -187,6 +188,7 @@ void ProviderSetupWindow::CreateUi() {
     status_box_ = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", L"", WS_CHILD | WS_VISIBLE | ES_MULTILINE | ES_AUTOVSCROLL | WS_VSCROLL | ES_READONLY, 0, 0, 0, 0, hwnd_, control_id(kControlStatus), instance_, nullptr);
 
     CheckDlgButton(hwnd_, kControlEnabled, BST_CHECKED);
+    UpdateSecretSourceUi();
     Layout();
 }
 
@@ -270,6 +272,7 @@ void ProviderSetupWindow::RefreshProviders() {
     SetWindowTextW(env_var_edit_, L"");
     SetWindowTextW(secret_ref_edit_, L"");
     CheckDlgButton(hwnd_, kControlEnabled, BST_CHECKED);
+    UpdateSecretSourceUi();
     SetStatusText("No providers configured.");
 }
 
@@ -286,14 +289,36 @@ void ProviderSetupWindow::PopulateFromSelection() {
     SetWindowTextW(model_name_edit_, widen(provider.model_name).c_str());
     const int combo_index = combo_find_string_exact(secret_source_combo_, widen(provider.secret_source.empty() ? "direct" : provider.secret_source));
     SendMessageW(secret_source_combo_, CB_SETCURSEL, combo_index == CB_ERR ? 0 : combo_index, 0);
+    SetWindowTextW(api_key_edit_, L"");
+    SetWindowTextW(env_var_edit_, widen(provider.env_var_name == "unset" ? std::string{} : provider.env_var_name).c_str());
+    SetWindowTextW(secret_ref_edit_, widen(provider.existing_secret_reference == "unset" ? std::string{} : provider.existing_secret_reference).c_str());
     CheckDlgButton(hwnd_, kControlEnabled, provider.enabled ? BST_CHECKED : BST_UNCHECKED);
+    UpdateSecretSourceUi();
 
     std::ostringstream status;
     status << "Provider: " << provider.provider_name;
-    if (!provider.model_name.empty()) status << "\r\nModel: " << provider.model_name;
-    status << "\r\nSecret: " << provider.redacted_secret_status;
+    status << "\r\nDisplay Name: " << (provider.display_name.empty() ? "unset" : provider.display_name);
+    status << "\r\nModel: " << (provider.model_name.empty() ? "unset" : provider.model_name);
+    status << "\r\nSecret Source: " << (provider.secret_source.empty() ? "direct" : provider.secret_source);
+    if (provider.secret_source == "env") status << "\r\nEnv Var Name: " << (provider.env_var_name.empty() || provider.env_var_name == "unset" ? "unset" : provider.env_var_name);
+    if (provider.secret_source == "existing") status << "\r\nExisting Secret Reference: " << (provider.existing_secret_reference.empty() || provider.existing_secret_reference == "unset" ? "unset" : provider.existing_secret_reference);
+    status << "\r\nSecret Status: " << (provider.redacted_secret_status.empty() ? "unset" : provider.redacted_secret_status);
+    status << "\r\nEnabled: " << (provider.enabled ? "true" : "false");
     status << "\r\nStatus: " << (provider.status.empty() ? "unknown" : provider.status);
     SetStatusText(status.str());
+}
+
+void ProviderSetupWindow::UpdateSecretSourceUi() {
+    wchar_t source_text[32]{};
+    const int selected_source = static_cast<int>(SendMessageW(secret_source_combo_, CB_GETCURSEL, 0, 0));
+    if (selected_source != CB_ERR) SendMessageW(secret_source_combo_, CB_GETLBTEXT, selected_source, reinterpret_cast<LPARAM>(source_text));
+    const auto secret_source = narrow(source_text);
+    const bool direct = secret_source.empty() || secret_source == "direct";
+    const bool env = secret_source == "env";
+    const bool existing = secret_source == "existing";
+    EnableWindow(api_key_edit_, direct ? TRUE : FALSE);
+    EnableWindow(env_var_edit_, env ? TRUE : FALSE);
+    EnableWindow(secret_ref_edit_, existing ? TRUE : FALSE);
 }
 
 void ProviderSetupWindow::SaveCurrentProvider() {
