@@ -259,9 +259,12 @@ std::string trim_copy(const std::string& value) {
     return value.substr(start, end - start);
 }
 
-std::string provider_config_id_for_name(const std::string& provider_name) { return "provider." + provider_name; }
+std::string canonical_provider_name(const std::string& provider_name) {
+    return life_orchestrator::integration::inference::canonical_provider_name(provider_name);
+}
+std::string provider_config_id_for_name(const std::string& provider_name) { return "provider." + canonical_provider_name(provider_name); }
 std::filesystem::path provider_secret_path(const std::filesystem::path& data_root, const std::string& provider_name) {
-    return data_root / "config" / "providers" / (provider_name + ".secret");
+    return data_root / "config" / "providers" / (canonical_provider_name(provider_name) + ".secret");
 }
 void write_secret_file(const std::filesystem::path& path, const std::string& api_key) {
     if (path.has_parent_path()) std::filesystem::create_directories(path.parent_path());
@@ -792,9 +795,25 @@ ApplicationExitCode execute_command(ApplicationRuntime& runtime,
         return complete(ApplicationExitCode::Success, "Command help emitted.");
     };
 
+    auto provider_secret_source = [&](const core::IntegrationConfigurationRecord& record) {
+        return default_if_empty(record.non_secret_settings.contains("secret_source") ? record.non_secret_settings.at("secret_source") : std::string{},
+                                record.credential_storage_mode == core::CredentialStorageMode::InlinePlaceholderOnly ? "env" : "direct");
+    };
+
     auto find_provider_record = [&](const std::string& provider_name) -> std::optional<core::IntegrationConfigurationRecord> {
-        if (provider_name.empty()) return std::nullopt;
-        return runtime.integration_repository.get_by_id(provider_config_id_for_name(provider_name));
+        const auto canonical_name = canonical_provider_name(provider_name);
+        if (canonical_name.empty()) return std::nullopt;
+        std::optional<core::IntegrationConfigurationRecord> best;
+        for (const auto& candidate : runtime.integration_repository.list_all()) {
+            if (canonical_provider_name(candidate.integration_id) != canonical_name) continue;
+            if (!best.has_value()
+                || (candidate.enabled && !best->enabled)
+                || (candidate.enabled == best->enabled && canonical_provider_name(candidate.integration_id) == candidate.integration_id && canonical_provider_name(best->integration_id) != best->integration_id)
+                || (candidate.enabled == best->enabled && (candidate.updated_at > best->updated_at || (candidate.updated_at == best->updated_at && candidate.version > best->version)))) {
+                best = candidate;
+            }
+        }
+        return best;
     };
 
     auto provider_secret_status = [&](const core::IntegrationConfigurationRecord& record) -> std::pair<std::string, std::string> {
@@ -810,14 +829,14 @@ ApplicationExitCode execute_command(ApplicationRuntime& runtime,
 
     auto emit_provider_record = [&](const core::IntegrationConfigurationRecord& record) {
         const auto [secret, reference] = provider_secret_status(record);
-        const auto secret_source = default_if_empty(record.non_secret_settings.contains("secret_source") ? record.non_secret_settings.at("secret_source") : std::string{}, record.credential_storage_mode == core::CredentialStorageMode::InlinePlaceholderOnly ? "env" : "direct");
+        const auto secret_source = provider_secret_source(record);
         const auto env_var_name = secret_source == "env"
                                       ? default_if_empty(record.non_secret_settings.contains("env_var_name") ? record.non_secret_settings.at("env_var_name") : std::string{}, "unset")
                                       : std::string{"unset"};
         const auto existing_secret_reference = secret_source == "existing"
                                                    ? default_if_empty(record.non_secret_settings.contains("existing_secret_reference") ? record.non_secret_settings.at("existing_secret_reference") : std::string{}, "unset")
                                                    : std::string{"unset"};
-        output << "provider_name=" << record.integration_id << '\n'
+        output << "provider_name=" << canonical_provider_name(record.integration_id) << '\n'
                << "display_name=" << record.display_name << '\n'
                << "enabled=" << (record.enabled ? "true" : "false") << '\n'
                << "status=" << core::to_string(record.status) << '\n'
@@ -829,7 +848,8 @@ ApplicationExitCode execute_command(ApplicationRuntime& runtime,
                << "credential_reference=" << default_if_empty(reference, "unset") << '\n'
                << "api_key_redacted=" << redact_secret(secret) << '\n'
                << "updated_at=" << record.updated_at << '\n'
-               << "version=" << record.version << '\n';
+               << "version=" << record.version << '\n'
+               << "effective_data_root=" << runtime.config.data_root_path.string() << '\n';
     };
 
     integration::inference::InferenceTransportClient inference_client{};
@@ -873,19 +893,18 @@ ApplicationExitCode execute_command(ApplicationRuntime& runtime,
             }
         }
 
-        const auto providers = runtime.integration_repository.list_all();
-        if (providers.empty()) {
+        const auto provider = find_provider_record("openai");
+        if (!provider.has_value()) {
             routed_error << "operator_query=failed\nmessage=no_provider_configured\nremediation_action=update_provider_configuration\nremediation_command=integration-set-provider\nremediation_prompt=No provider is configured yet. Open Configure Provider and choose a provider, model, and secret source to continue.\n";
             return ApplicationExitCode::RuntimeOperationFailure;
         }
-        const auto& provider = providers.front();
         const auto context = build_intent_command_context(command_names(), alias_table(), list_action_form_specs());
         const auto closest = closest_command_names(input);
         const auto route = route_with_provider(normalized_input,
                                                context,
                                                closest,
                                                [&](const std::string& prompt) {
-                                                   return run_provider_request(provider, prompt + "\nUser request: " + input).second;
+                                                   return run_provider_request(*provider, prompt + "\nUser request: " + input).second;
                                                });
         auto sanitize_operator_value = [](std::string value, std::size_t max_length = 512) {
             value = life_orchestrator::integration::inference::sanitize_diagnostic_text(value, max_length);
@@ -904,8 +923,11 @@ ApplicationExitCode execute_command(ApplicationRuntime& runtime,
         normalized_route.closest_commands.erase(std::remove_if(normalized_route.closest_commands.begin(), normalized_route.closest_commands.end(), [](const std::string& value) { return trim_copy(value).empty(); }), normalized_route.closest_commands.end());
 
         routed_output << "operator_query=llm_interpreter\n";
-        routed_output << "provider_request_provider_name=" << provider.integration_id << '\n';
-        routed_output << "provider_request_model_name=" << default_if_empty(provider.non_secret_settings.contains("model_name") ? provider.non_secret_settings.at("model_name") : std::string{}, "unset") << '\n';
+        routed_output << "provider_request_provider_name=" << canonical_provider_name(provider->integration_id) << '\n';
+        routed_output << "provider_request_canonical_provider_name=" << canonical_provider_name(provider->integration_id) << '\n';
+        routed_output << "provider_request_model_name=" << default_if_empty(provider->non_secret_settings.contains("model_name") ? provider->non_secret_settings.at("model_name") : std::string{}, "unset") << '\n';
+        routed_output << "provider_request_secret_source=" << provider_secret_source(*provider) << '\n';
+        routed_output << "effective_data_root=" << runtime.config.data_root_path.string() << '\n';
         routed_output << "intent_model_output=" << normalized_route.raw_model_output << '\n';
         routed_output << "raw_mode=" << sanitize_operator_value(normalized_route.raw_mode, 32) << '\n';
         routed_output << "normalized_mode=" << sanitize_operator_value(normalized_route.mode, 32) << '\n';
@@ -1444,7 +1466,7 @@ ApplicationExitCode execute_command(ApplicationRuntime& runtime,
                 return complete(ApplicationExitCode::CommandValidationFailure, "Missing required argument: existing_secret_reference");
             }
             const auto now = core::current_timestamp_utc();
-            const auto provider_name = sanitize_for_storage(runtime.config.command_parameters.at("provider_name"));
+            const auto provider_name = canonical_provider_name(sanitize_for_storage(runtime.config.command_parameters.at("provider_name")));
             auto existing = find_provider_record(provider_name);
             auto credential_storage_mode = core::CredentialStorageMode::ExternalSecretReference;
             auto credential_reference = std::string{};
@@ -1500,7 +1522,8 @@ ApplicationExitCode execute_command(ApplicationRuntime& runtime,
                    << "existing_secret_reference=" << (secret_source == "existing" ? default_if_empty(record.non_secret_settings.contains("existing_secret_reference") ? record.non_secret_settings.at("existing_secret_reference") : std::string{}, "unset") : std::string{"unset"}) << '\n'
                    << "credential_reference=" << default_if_empty(record.credential_reference, "unset") << '\n'
                    << "api_key_redacted=" << redacted_secret << '\n'
-                   << "version=" << record.version << '\n';
+                   << "version=" << record.version << '\n'
+                   << "effective_data_root=" << runtime.config.data_root_path.string() << '\n';
             return complete(ApplicationExitCode::Success, "Integration provider configured.");
         }
         case ApplicationRunMode::IntegrationShowProvider: {
@@ -1510,24 +1533,26 @@ ApplicationExitCode execute_command(ApplicationRuntime& runtime,
                 error << "integration_show_provider=failed\nmessage=provider_not_found\n";
                 return complete(ApplicationExitCode::RuntimeOperationFailure, "Provider not found.");
             }
-            output << "integration_show_provider=ok\n";
+            output << "integration_show_provider=ok\n"
+                   << "effective_data_root=" << runtime.config.data_root_path.string() << '\n';
             emit_provider_record(*record);
             return complete(ApplicationExitCode::Success, "Integration provider shown.");
         }
         case ApplicationRunMode::IntegrationListProviders: {
             const auto providers = runtime.integration_repository.list_all();
             output << "integration_list_providers=ok\n"
-                   << "provider_count=" << providers.size() << '\n';
+                   << "provider_count=" << providers.size() << '\n'
+                   << "effective_data_root=" << runtime.config.data_root_path.string() << '\n';
             for (const auto& record : providers) {
                 const auto [secret, reference] = provider_secret_status(record);
-                const auto secret_source = default_if_empty(record.non_secret_settings.contains("secret_source") ? record.non_secret_settings.at("secret_source") : std::string{}, record.credential_storage_mode == core::CredentialStorageMode::InlinePlaceholderOnly ? "env" : "direct");
+                const auto secret_source = provider_secret_source(record);
                 const auto env_var_name = secret_source == "env"
                                               ? default_if_empty(record.non_secret_settings.contains("env_var_name") ? record.non_secret_settings.at("env_var_name") : std::string{}, "unset")
                                               : std::string{"unset"};
                 const auto existing_secret_reference = secret_source == "existing"
                                                            ? default_if_empty(record.non_secret_settings.contains("existing_secret_reference") ? record.non_secret_settings.at("existing_secret_reference") : std::string{}, "unset")
                                                            : std::string{"unset"};
-                emit_ordered_kv_block(output, {{"provider_name", record.integration_id},
+                emit_ordered_kv_block(output, {{"provider_name", canonical_provider_name(record.integration_id)},
                                                {"display_name", default_if_empty(record.display_name, "unset")},
                                                {"enabled", record.enabled ? "true" : "false"},
                                                {"status", core::to_string(record.status)},
@@ -1536,12 +1561,15 @@ ApplicationExitCode execute_command(ApplicationRuntime& runtime,
                                                {"env_var_name", env_var_name},
                                                {"existing_secret_reference", existing_secret_reference},
                                                {"credential_reference", default_if_empty(reference, "unset")},
+                                               {"updated_at", record.updated_at},
+                                               {"version", std::to_string(record.version)},
+                                               {"effective_data_root", runtime.config.data_root_path.string()},
                                                {"api_key_redacted", redact_secret(secret)}});
             }
             return complete(ApplicationExitCode::Success, "Integration providers listed.");
         }
         case ApplicationRunMode::IntegrationTestProvider: {
-            const auto provider_name = runtime.config.command_parameters.contains("provider_name") ? runtime.config.command_parameters.at("provider_name") : (runtime.integration_repository.list_all().empty() ? std::string{} : runtime.integration_repository.list_all().front().integration_id);
+            const auto provider_name = runtime.config.command_parameters.contains("provider_name") ? runtime.config.command_parameters.at("provider_name") : std::string{"openai"};
             const auto record = find_provider_record(provider_name);
             if (!record) {
                 error << "integration_test_provider=failed\nmessage=provider_not_found\n";
@@ -1562,7 +1590,9 @@ ApplicationExitCode execute_command(ApplicationRuntime& runtime,
                 error << "integration_test_provider=failed\n"
                       << "message=" << failure_class << '\n'
                       << "summary=" << summary << '\n'
-                      << "provider_name=" << record->integration_id << '\n'
+                      << "provider_name=" << canonical_provider_name(record->integration_id) << '\n'
+                      << "secret_source=" << provider_secret_source(*record) << '\n'
+                      << "effective_data_root=" << runtime.config.data_root_path.string() << '\n'
                       << "secret_reference=" << secret_reference << '\n'
                       << "metadata_loaded=" << (health.metadata_loaded ? "true" : "false") << '\n'
                       << "secret_resolved=" << (health.secret_resolved ? "true" : "false") << '\n'
@@ -1579,8 +1609,10 @@ ApplicationExitCode execute_command(ApplicationRuntime& runtime,
             }
             output << "integration_test_provider=ok\n"
                    << "summary=ok failure_class=none failure_stage=none win32_error_code=none win32_error_message=none http_status=none request_id=none outbound_request_attempted=" << (health.outbound_request_attempted ? "true" : "false") << " response_content_type=none response_preview=none\n"
-                   << "provider_name=" << record->integration_id << '\n'
+                   << "provider_name=" << canonical_provider_name(record->integration_id) << '\n'
                    << "model_name=" << default_if_empty(record->non_secret_settings.contains("model_name") ? record->non_secret_settings.at("model_name") : std::string{}, "unset") << '\n'
+                   << "secret_source=" << provider_secret_source(*record) << '\n'
+                   << "effective_data_root=" << runtime.config.data_root_path.string() << '\n'
                    << "metadata_loaded=" << (health.metadata_loaded ? "true" : "false") << '\n'
                    << "secret_resolved=" << (health.secret_resolved ? "true" : "false") << '\n'
                    << "outbound_request_attempted=" << (health.outbound_request_attempted ? "true" : "false") << '\n'

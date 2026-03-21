@@ -34,6 +34,10 @@ struct AssistantShellExecutionSummary {
     std::string normalized_matched_command;
     std::string route_acceptance_result;
     std::string route_rejection_reason;
+    std::string effective_canonical_provider_name;
+    std::string effective_model_name;
+    std::string effective_secret_source;
+    std::string effective_data_root;
 };
 
 struct AssistantShellArtifactCard {
