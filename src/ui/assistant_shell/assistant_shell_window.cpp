@@ -148,25 +148,37 @@ LRESULT AssistantShellWindow::HandleMessage(UINT message, WPARAM w_param, LPARAM
         }
         case WM_COMMAND: {
             const int id = LOWORD(w_param);
-            if (HIWORD(w_param) == BN_CLICKED) {
+            const UINT notification_code = HIWORD(w_param);
+            if (HandleMenuCommand(id, notification_code, l_param)) return 0;
+            if (notification_code == BN_CLICKED) {
                 if (id == kControlSubmit) { SubmitComposer(); return 0; }
                 if (id == kControlTogglePanel) { ToggleToolPanel(); return 0; }
                 if (id == kControlConfirmAccept) { ResolveConfirmation(true); return 0; }
                 if (id == kControlConfirmDecline) { ResolveConfirmation(false); return 0; }
             }
-            if (id == kMenuDeveloperLayer) { OpenDeveloperLayer(); return 0; }
-            if (id == kMenuConsole) { OpenConsole(); return 0; }
-            if (id == kMenuApiKeys) { OpenProviderConfiguration(); return 0; }
-            if (id == kMenuActiveModules) { ShowActiveModules(); return 0; }
-            if (id == kMenuActiveInterfaces) { ShowActiveInterfaces(); return 0; }
-            if (id == kMenuHelp) { ShowHelp(); return 0; }
-            if (id == kMenuSettings) { ShowSettings(); return 0; }
             return 0;
         }
         case WM_DESTROY: PostQuitMessage(0); return 0;
         default: break;
     }
     return DefWindowProcW(hwnd_, message, w_param, l_param);
+}
+
+bool AssistantShellWindow::HandleMenuCommand(int id, UINT notification_code, LPARAM source_handle) {
+    const bool is_menu_command = notification_code == 0 && source_handle == 0;
+    if (!is_menu_command) {
+        if (id == kMenuDeveloperLayer) emit_window_diagnostic("assistant_shell_ignored_non_menu_developer_layer_launch");
+        return false;
+    }
+
+    if (id == kMenuDeveloperLayer) { OpenDeveloperLayer(SurfaceLaunchOrigin::MenuCommand); return true; }
+    if (id == kMenuConsole) { OpenConsole(); return true; }
+    if (id == kMenuApiKeys) { OpenProviderConfiguration(); return true; }
+    if (id == kMenuActiveModules) { ShowActiveModules(); return true; }
+    if (id == kMenuActiveInterfaces) { ShowActiveInterfaces(); return true; }
+    if (id == kMenuHelp) { ShowHelp(); return true; }
+    if (id == kMenuSettings) { ShowSettings(); return true; }
+    return false;
 }
 
 void AssistantShellWindow::CreateUi() {
@@ -406,7 +418,11 @@ void AssistantShellWindow::ShowInfoDialog(const std::wstring& title, const std::
     MessageBoxW(hwnd_, widen(body).c_str(), title.c_str(), MB_OK | MB_ICONINFORMATION);
 }
 
-void AssistantShellWindow::OpenDeveloperLayer() {
+void AssistantShellWindow::OpenDeveloperLayer(SurfaceLaunchOrigin origin) {
+    if (origin != SurfaceLaunchOrigin::MenuCommand) {
+        emit_window_diagnostic("assistant_shell_ignored_non_explicit_developer_layer_launch");
+        return;
+    }
     OpenSiblingExecutable(L"life_orchestrator_admin_gui.exe", L"Developer Layer", "Opened the Developer Layer surface in a separate window.");
 }
 
