@@ -253,24 +253,32 @@ void AssistantShellWindow::Layout() {
 std::string AssistantShellWindow::RenderMessageBlockLine(const app::assistant_shell::AssistantShellMessage& message,
                                                          const app::assistant_shell::AssistantShellMessageBlock& block) {
     std::ostringstream line;
-    if (block.type == app::assistant_shell::AssistantShellMessageBlockType::UserText) line << "You: ";
+    if (block.type == app::assistant_shell::AssistantShellMessageBlockType::ExecutionSummary) line << "Details: ";
+    else if (block.type == app::assistant_shell::AssistantShellMessageBlockType::Confirmation) line << "Confirmation: ";
+    else if (block.type == app::assistant_shell::AssistantShellMessageBlockType::ArtifactCard) line << "Artifact: ";
+    else if (block.type == app::assistant_shell::AssistantShellMessageBlockType::UserText) line << "You: ";
     else if (message.role == "assistant") line << "Assistant: ";
     else line << "System: ";
     line << sanitize_transcript_value(block.text);
     if (block.execution_summary.has_value()) {
         const auto& summary = *block.execution_summary;
-        line << "\r\n  Route: " << sanitize_transcript_value(summary.selected_route, 120)
+        line << "
+  Route: " << sanitize_transcript_value(summary.selected_route, 120)
              << " | Path: " << sanitize_transcript_value(summary.resolution_path, 120)
              << " | Confidence: " << summary.confidence
              << " | Provider: " << (summary.provider_used ? "yes" : "no");
-        if (!summary.explanation.empty()) line << "\r\n  Why: " << sanitize_transcript_value(summary.explanation);
+        if (!summary.explanation.empty()) line << "
+  Why: " << sanitize_transcript_value(summary.explanation);
     }
     if (block.artifact_card.has_value()) {
-        line << "\r\n  " << sanitize_transcript_value(block.artifact_card->title, 120);
-        for (const auto& [label, value] : block.artifact_card->summary_fields) line << "\r\n    " << sanitize_transcript_value(label, 80) << ": " << sanitize_transcript_value(value, 160);
+        line << "
+  " << sanitize_transcript_value(block.artifact_card->title, 120);
+        for (const auto& [label, value] : block.artifact_card->summary_fields) line << "
+    " << sanitize_transcript_value(label, 80) << ": " << sanitize_transcript_value(value, 160);
     }
     if (block.confirmation_request.has_value()) {
-        line << "\r\n  Confirmation: " << sanitize_transcript_value(block.confirmation_request->prompt, 160);
+        line << "
+  Confirmation: " << sanitize_transcript_value(block.confirmation_request->prompt, 160);
         pending_confirmation_ = block.confirmation_request;
     }
     return line.str();

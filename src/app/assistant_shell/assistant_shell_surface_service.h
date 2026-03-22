@@ -58,6 +58,9 @@ private:
     std::string now_string() const;
     std::string default_session_title(const std::string& first_user_text) const;
     std::optional<AssistantShellArtifactCard> build_artifact_card(const std::string& artifact_type) const;
+    AssistantShellTurnResponse compose_turn_response(const std::string& user_input_text,
+                                                     const AssistantShellExecutionSummary& routing_result,
+                                                     const AssistantShellRuntimeOutcome& runtime_outcome) const;
 };
 
 }  // namespace life_orchestrator::app::assistant_shell

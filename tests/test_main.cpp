@@ -1457,6 +1457,7 @@ void test_assistant_shell_surface_contract_strings() {
     using namespace life_orchestrator::app::assistant_shell;
     assert_true(to_string(AssistantShellMessageBlockType::ExecutionSummary) == "execution_summary", "contract string conversion should be stable");
     assert_true(to_string(AssistantShellSessionMode::Extended) == "extended", "session mode string conversion should be stable");
+    assert_true(to_string(AssistantShellRuntimeOutcome::Kind::ConfirmationRequired) == "confirmation_required", "runtime outcome string conversion should be stable");
 }
 
 void test_assistant_shell_submission_routing_precedence() {
@@ -1469,6 +1470,8 @@ void test_assistant_shell_submission_routing_precedence() {
 
     const auto result = service.SubmitUserText({"session-precedence", "backlog"});
     assert_true(result.ok, "exact alias resolution should succeed without provider");
+    assert_true(result.turn_response.has_value(), "submission should return the layered shell turn response");
+    assert_true(result.turn_response->runtime_outcome.kind == shell::AssistantShellRuntimeOutcome::Kind::ActionSucceeded || result.turn_response->runtime_outcome.kind == shell::AssistantShellRuntimeOutcome::Kind::QuerySucceeded, "exact alias should produce an authoritative runtime outcome");
     assert_true(!result.appended_messages.empty(), "submission should append assistant response");
     bool saw_summary = false;
     for (const auto& block : result.appended_messages.front().blocks) {
@@ -1494,11 +1497,13 @@ void test_assistant_shell_confirmation_generation_and_acceptance() {
     service.StartOrResumeSession("session-confirmation");
     const auto result = service.SubmitUserText({"session-confirmation", "update the provider api key"});
     assert_true(result.pending_confirmation.has_value(), "medium/high-risk interpreted actions should render inline confirmations");
+    assert_true(result.turn_response.has_value() && result.turn_response->runtime_outcome.kind == shell::AssistantShellRuntimeOutcome::Kind::ConfirmationRequired, "confirmation-producing requests should narrate a confirmation-required outcome");
     assert_true(result.status.pending_confirmation_count == 1, "status should expose pending confirmation count");
 
     const auto confirmation = service.ResolveConfirmation("session-confirmation", result.pending_confirmation->confirmation_id, true);
     assert_true(confirmation.accepted, "accepting confirmation should succeed");
     assert_true(confirmation.execution_summary.has_value() && confirmation.execution_summary->resolution_path == "confirmation_resolution", "confirmation acceptance should preserve authoritative execution lineage");
+    assert_true(confirmation.runtime_outcome.has_value() && confirmation.runtime_outcome->kind == shell::AssistantShellRuntimeOutcome::Kind::ActionSucceeded, "accepted confirmation should produce an authoritative execution outcome");
 }
 
 void test_assistant_shell_no_provider_remediation_and_redaction() {
@@ -1509,6 +1514,7 @@ void test_assistant_shell_no_provider_remediation_and_redaction() {
     service.StartOrResumeSession("session-no-provider");
     const auto result = service.SubmitUserText({"session-no-provider", "plan my week"});
     assert_true(result.ok, "no-provider remediation should still return a friendly assistant response");
+    assert_true(result.turn_response.has_value() && result.turn_response->runtime_outcome.kind == shell::AssistantShellRuntimeOutcome::Kind::ProviderRemediationNeeded, "no-provider path should surface a provider remediation runtime outcome");
     bool saw_remediation = false;
     for (const auto& block : result.appended_messages.front().blocks) {
         if (block.type == shell::AssistantShellMessageBlockType::AssistantResponse && block.text.find("Configure a provider") != std::string::npos) saw_remediation = true;
@@ -1538,7 +1544,8 @@ void test_assistant_shell_session_persistence_and_reload() {
     std::filesystem::remove_all(root);
     shell::AssistantShellSurfaceService service(root, std::filesystem::current_path(), "");
     service.StartOrResumeSession("session-persist");
-    service.SubmitUserText({"session-persist", "status"});
+    const auto submit = service.SubmitUserText({"session-persist", "status"});
+    assert_true(submit.turn_response.has_value() && !submit.turn_response->primary_narration_text.empty(), "persisted turns should include primary narration text");
     const auto sessions = service.ListSessions();
     assert_true(!sessions.empty(), "historical chats should list persisted sessions");
     assert_true(sessions.front().session_id == "session-persist", "persisted session should be discoverable by id");

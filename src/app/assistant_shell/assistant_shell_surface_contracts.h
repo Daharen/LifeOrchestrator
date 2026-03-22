@@ -40,6 +40,38 @@ struct AssistantShellExecutionSummary {
     std::string effective_data_root;
 };
 
+struct AssistantShellRuntimeOutcome {
+    enum class Kind {
+        InputAccepted,
+        ActionSucceeded,
+        QuerySucceeded,
+        ConfirmationRequired,
+        Rejected,
+        Failed,
+        NoActionResolved,
+        ProviderRemediationNeeded
+    };
+
+    Kind kind = Kind::InputAccepted;
+    bool authoritative_execution = false;
+    bool provider_used = false;
+    bool confirmation_required = false;
+    std::string selected_route;
+    std::string canonical_command;
+    std::string failure_classification;
+    std::string status_text;
+    std::string authoritative_message;
+    std::string lineage;
+};
+
+struct AssistantShellTurnResponse {
+    std::string user_input_text;
+    AssistantShellExecutionSummary routing_result;
+    AssistantShellRuntimeOutcome runtime_outcome;
+    std::string primary_narration_text;
+    std::string secondary_diagnostics_text;
+};
+
 struct AssistantShellArtifactCard {
     std::string artifact_type;
     std::string artifact_id;
@@ -60,6 +92,8 @@ struct AssistantShellConfirmationResult {
     std::string confirmation_id;
     std::string assistant_message;
     std::optional<AssistantShellExecutionSummary> execution_summary;
+    std::optional<AssistantShellRuntimeOutcome> runtime_outcome;
+    std::optional<AssistantShellTurnResponse> turn_response;
 };
 
 struct AssistantShellMessageBlock {
@@ -97,7 +131,6 @@ struct AssistantShellToolPanelSection {
     std::string empty_state;
     std::vector<AssistantShellToolPanelItem> items;
 };
-
 
 struct AssistantShellAttachmentReference {
     std::string local_path;
@@ -167,9 +200,11 @@ struct AssistantShellSubmissionResult {
     std::optional<AssistantShellConfirmationRequest> pending_confirmation;
     AssistantShellPendingAttachmentState pending_attachments;
     AssistantShellProviderOperationalState provider_state;
+    std::optional<AssistantShellTurnResponse> turn_response;
 };
 
 std::string to_string(AssistantShellMessageBlockType type);
 std::string to_string(AssistantShellSessionMode mode);
+std::string to_string(AssistantShellRuntimeOutcome::Kind kind);
 
 }  // namespace life_orchestrator::app::assistant_shell

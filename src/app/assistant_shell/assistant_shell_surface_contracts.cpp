@@ -22,4 +22,18 @@ std::string to_string(AssistantShellSessionMode mode) {
     return "concise";
 }
 
+std::string to_string(AssistantShellRuntimeOutcome::Kind kind) {
+    switch (kind) {
+        case AssistantShellRuntimeOutcome::Kind::InputAccepted: return "input_accepted";
+        case AssistantShellRuntimeOutcome::Kind::ActionSucceeded: return "action_succeeded";
+        case AssistantShellRuntimeOutcome::Kind::QuerySucceeded: return "query_succeeded";
+        case AssistantShellRuntimeOutcome::Kind::ConfirmationRequired: return "confirmation_required";
+        case AssistantShellRuntimeOutcome::Kind::Rejected: return "rejected";
+        case AssistantShellRuntimeOutcome::Kind::Failed: return "failed";
+        case AssistantShellRuntimeOutcome::Kind::NoActionResolved: return "no_action_resolved";
+        case AssistantShellRuntimeOutcome::Kind::ProviderRemediationNeeded: return "provider_remediation_needed";
+    }
+    return "input_accepted";
+}
+
 }  // namespace life_orchestrator::app::assistant_shell
