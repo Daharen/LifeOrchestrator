@@ -177,6 +177,20 @@ AssistantShellMessage make_turn_message(const std::string& message_id,
     return message;
 }
 
+bool should_attach_provider_artifact_card(const AssistantShellTurnResponse& turn_response) {
+    const auto& runtime_outcome = turn_response.runtime_outcome;
+    std::string route = runtime_outcome.canonical_command.empty() ? runtime_outcome.selected_route : runtime_outcome.canonical_command;
+    if (route.empty()) {
+        std::istringstream input(turn_response.user_input_text);
+        input >> route;
+    }
+    return runtime_outcome.kind == AssistantShellRuntimeOutcome::Kind::ProviderRemediationNeeded ||
+           route == "integration-set-provider" ||
+           route == "integration-list-providers" ||
+           route == "integration-show-provider" ||
+           route == "integration-test-provider";
+}
+
 }  // namespace
 
 AssistantShellSurfaceService::AssistantShellSurfaceService(std::filesystem::path data_root,
@@ -609,8 +623,8 @@ AssistantShellSubmissionResult AssistantShellSurfaceService::SubmitUserText(cons
 
             const auto turn_response = compose_turn_response(request.user_text, exec_summary, runtime_outcome);
             AssistantShellMessage assistant = make_turn_message("assistant-" + now_string(), turn_response, confirmation);
-            if (const auto provider_card = build_artifact_card("provider_config_summary"); provider_card.has_value()) {
-                if (exec_summary.selected_route == "integration-set-provider" || exec_summary.selected_route == "integration-list-providers" || combined.find("provider_name=") != std::string::npos) {
+            if (should_attach_provider_artifact_card(turn_response)) {
+                if (const auto provider_card = build_artifact_card("provider_config_summary"); provider_card.has_value()) {
                     assistant.blocks.push_back({AssistantShellMessageBlockType::ArtifactCard, provider_card->title, false, std::nullopt, std::nullopt, *provider_card});
                 }
             }

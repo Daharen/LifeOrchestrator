@@ -1433,6 +1433,7 @@ void test_assistant_shell_live_provider_degrades_gracefully_for_invalid_routes()
     const auto ok_result = service.SubmitUserText({"session-live-provider", "create a weekly laundry task"});
     assert_true(ok_result.ok && !ok_result.appended_messages.empty(), "valid live provider output with confirmation false should reach the shell safely");
     bool saw_ok_diagnostics = false;
+    bool saw_provider_artifact_card = false;
     for (const auto& block : ok_result.appended_messages.front().blocks) {
         if (block.execution_summary.has_value()) {
             saw_ok_diagnostics = true;
@@ -1446,8 +1447,10 @@ void test_assistant_shell_live_provider_degrades_gracefully_for_invalid_routes()
             assert_true(block.execution_summary->effective_secret_source == "direct", "shell should expose effective secret-source diagnostics");
             assert_true(block.execution_summary->effective_data_root == root.string(), "shell should expose effective data-root diagnostics");
         }
+        if (block.artifact_card.has_value() && block.artifact_card->artifact_type == "provider_config_summary") saw_provider_artifact_card = true;
     }
     assert_true(saw_ok_diagnostics, "successful live provider shell requests should include extended diagnostics");
+    assert_true(!saw_provider_artifact_card, "ordinary successful provider-routed task turns should not attach provider config artifact cards");
 
     const auto confirm_result = service.SubmitUserText({"session-live-provider", "update the provider api key"});
     assert_true(confirm_result.ok && confirm_result.pending_confirmation.has_value(), "valid live provider output with confirmation true should create confirmation state safely");
@@ -1527,14 +1530,17 @@ void test_assistant_shell_no_provider_remediation_and_redaction() {
     assert_true(rc == 0, "provider should configure for redaction visibility test");
     const auto provider_result = service.SubmitUserText({"session-no-provider", "integration-list-providers"});
     bool saw_redacted_card = false;
+    bool saw_provider_card = false;
     for (const auto& block : provider_result.appended_messages.front().blocks) {
         if (block.artifact_card.has_value()) {
+            if (block.artifact_card->artifact_type == "provider_config_summary") saw_provider_card = true;
             for (const auto& [label, value] : block.artifact_card->summary_fields) {
                 if (label == "API Key" && value.find("***") != std::string::npos) saw_redacted_card = true;
                 assert_true(value.find("TEST_KEY_123") == std::string::npos, "shell-visible provider metadata must remain redacted");
             }
         }
     }
+    assert_true(saw_provider_card, "explicit provider flows should still surface provider artifact cards");
     assert_true(saw_redacted_card, "provider artifact card should preserve secret redaction");
 }
 
