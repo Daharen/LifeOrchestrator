@@ -58,6 +58,13 @@ std::vector<std::pair<std::string, std::string>> parse_kv_pairs(const std::strin
     return fields;
 }
 
+struct ListedActivityRow {
+    std::string activity_id;
+    std::string title;
+    std::string domain_source;
+    std::string frequency;
+};
+
 std::string sanitize_line(std::string value) {
     std::replace(value.begin(), value.end(), '\n', ' ');
     std::replace(value.begin(), value.end(), '\r', ' ');
@@ -84,6 +91,72 @@ std::string sanitize_shell_field(std::string value, std::size_t max_length = kMa
     value = sanitize_line(trim_copy(value));
     if (value.size() > max_length) value = value.substr(0, max_length) + "...";
     return value;
+}
+
+std::optional<std::string> build_query_result_narration(const std::string& canonical_command, const std::string& combined_output) {
+    if (canonical_command != "procedural-list-activities") return std::nullopt;
+
+    std::vector<ListedActivityRow> activities;
+    ListedActivityRow current;
+    bool has_current = false;
+
+    for (const auto& raw_line : split_lines(combined_output)) {
+        const auto line = trim_copy(raw_line);
+        if (line.empty()) continue;
+        const auto pos = line.find('=');
+        if (pos == std::string::npos) continue;
+
+        const auto key = line.substr(0, pos);
+        const auto value = line.substr(pos + 1);
+
+        if (key == "activity_id") {
+            if (has_current) activities.push_back(current);
+            current = {};
+            current.activity_id = value;
+            has_current = true;
+            continue;
+        }
+        if (!has_current) continue;
+        if (key == "title") current.title = value;
+        else if (key == "domain_source") current.domain_source = value;
+        else if (key == "frequency") current.frequency = value;
+    }
+
+    if (has_current) activities.push_back(current);
+
+    if (activities.empty()) return std::string{"You have no activities recorded."};
+
+    auto summarize_activity = [](const ListedActivityRow& activity) {
+        std::string summary = activity.title.empty() ? activity.activity_id : activity.title;
+        std::vector<std::string> descriptors;
+        if (!activity.domain_source.empty()) descriptors.push_back(activity.domain_source);
+        if (!activity.frequency.empty()) descriptors.push_back(activity.frequency);
+        if (!descriptors.empty()) {
+            summary += " (";
+            for (std::size_t i = 0; i < descriptors.size(); ++i) {
+                if (i > 0) summary += ", ";
+                summary += descriptors[i];
+            }
+            summary += ")";
+        }
+        return sanitize_shell_field(summary, 120);
+    };
+
+    if (activities.size() == 1) {
+        return "You have 1 activity recorded: " + summarize_activity(activities.front()) + ".";
+    }
+
+    constexpr std::size_t kPreviewCount = 3;
+    std::ostringstream narration;
+    narration << "You have " << activities.size() << " activities recorded: ";
+    const auto preview_count = std::min<std::size_t>(activities.size(), kPreviewCount);
+    for (std::size_t index = 0; index < preview_count; ++index) {
+        if (index > 0) narration << "; ";
+        narration << summarize_activity(activities[index]);
+    }
+    if (activities.size() > preview_count) narration << "; and " << (activities.size() - preview_count) << " more";
+    narration << '.';
+    return narration.str();
 }
 
 bool try_parse_confidence(const std::string& value, double& parsed) {
@@ -127,6 +200,13 @@ std::vector<std::string> parse_command_args(const std::string& value) {
     std::string token;
     while (in >> token) args.push_back(sanitize_shell_field(token, 120));
     return args;
+}
+
+std::string first_token(const std::string& value) {
+    std::istringstream in(value);
+    std::string token;
+    in >> token;
+    return token;
 }
 
 std::string build_diagnostics_text(const AssistantShellExecutionSummary& summary, const AssistantShellRuntimeOutcome& runtime_outcome) {
@@ -561,9 +641,14 @@ AssistantShellSubmissionResult AssistantShellSurfaceService::SubmitUserText(cons
             }
 
             const auto user_message = sanitize_shell_field(value_for_key(combined, "user_facing_message"), 320);
-            const auto canonical = sanitize_shell_field(value_for_key(combined, "canonical_command"), 96);
+            auto canonical = sanitize_shell_field(value_for_key(combined, "canonical_command"), 96);
+            if (canonical.empty() && !exec_summary.selected_route.empty()) canonical = exec_summary.selected_route;
+            if (canonical.empty() && !exec_summary.provider_used) canonical = sanitize_shell_field(first_token(request.user_text), 96);
             const auto args_text = value_for_key(combined, "args");
-            const auto response_text = !user_message.empty() ? user_message : (!canonical.empty() ? "Completed " + canonical + "." : exec_summary.provider_used ? "The provider returned an incomplete shell response." : "Completed the requested action.");
+            const auto query_result_narration = build_query_result_narration(canonical, combined);
+            const auto response_text = query_result_narration.has_value()
+                                           ? *query_result_narration
+                                           : (!user_message.empty() ? user_message : (!canonical.empty() ? "Completed " + canonical + "." : exec_summary.provider_used ? "The provider returned an incomplete shell response." : "Completed the requested action."));
 
             AssistantShellRuntimeOutcome runtime_outcome;
             runtime_outcome.provider_used = exec_summary.provider_used;
@@ -613,7 +698,7 @@ AssistantShellSubmissionResult AssistantShellSurfaceService::SubmitUserText(cons
                 }
             }
             if (runtime_outcome.kind == AssistantShellRuntimeOutcome::Kind::InputAccepted) {
-                runtime_outcome.kind = canonical == "status" || starts_with(canonical, "artifact.") || starts_with(exec_summary.selected_route, "artifact.") || exec_summary.selected_route == "status"
+                runtime_outcome.kind = canonical == "status" || canonical == "procedural-list-activities" || starts_with(canonical, "artifact.") || starts_with(exec_summary.selected_route, "artifact.") || exec_summary.selected_route == "status"
                     ? AssistantShellRuntimeOutcome::Kind::QuerySucceeded
                     : AssistantShellRuntimeOutcome::Kind::ActionSucceeded;
                 runtime_outcome.authoritative_execution = true;

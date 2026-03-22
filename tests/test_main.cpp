@@ -1509,6 +1509,47 @@ void test_assistant_shell_confirmation_generation_and_acceptance() {
     assert_true(confirmation.runtime_outcome.has_value() && confirmation.runtime_outcome->kind == shell::AssistantShellRuntimeOutcome::Kind::ActionSucceeded, "accepted confirmation should produce an authoritative execution outcome");
 }
 
+void test_assistant_shell_activity_query_narrates_returned_results() {
+    namespace shell = life_orchestrator::app::assistant_shell;
+    const std::filesystem::path root = "artifacts/assistant_shell_activity_query";
+    std::filesystem::remove_all(root);
+
+    std::ostringstream first_out;
+    std::ostringstream first_err;
+    auto rc = life_orchestrator::app::run_application({"procedural-upsert-activity", "--data-root=" + root.string(), "--quiet-startup", "--activity-id", "activity.alpha", "--title", "Alpha inbox", "--domain-source", "operations", "--frequency", "daily", "--duration-minutes", "45", "--effort", "8", "--outcome-value", "3"}, first_out, first_err, "", std::filesystem::current_path());
+    assert_true(rc == 0, "first activity seed should succeed");
+
+    std::ostringstream second_out;
+    std::ostringstream second_err;
+    rc = life_orchestrator::app::run_application({"procedural-upsert-activity", "--data-root=" + root.string(), "--quiet-startup", "--activity-id", "activity.beta", "--title", "Beta review", "--domain-source", "planning", "--frequency", "weekly", "--duration-minutes", "30", "--effort", "4", "--outcome-value", "6"}, second_out, second_err, "", std::filesystem::current_path());
+    assert_true(rc == 0, "second activity seed should succeed");
+
+    shell::AssistantShellSurfaceService service(root, std::filesystem::current_path(), "");
+    service.StartOrResumeSession("session-activity-query");
+    const auto result = service.SubmitUserText({"session-activity-query", "procedural-list-activities"});
+    assert_true(result.ok, "activity listing query should succeed");
+    assert_true(result.turn_response.has_value(), "activity listing query should return a shell turn response");
+    assert_true(result.turn_response->runtime_outcome.kind == shell::AssistantShellRuntimeOutcome::Kind::QuerySucceeded, "activity listing should classify as a query success");
+    assert_true(result.turn_response->primary_narration_text.find("I completed that lookup.") == std::string::npos, "activity listing should not use the generic query fallback");
+    assert_true(result.turn_response->primary_narration_text.find("2 activities") != std::string::npos, "activity listing should narrate the returned activity count");
+    assert_true(result.turn_response->primary_narration_text.find("Alpha inbox") != std::string::npos, "activity listing should narrate at least one returned activity title");
+}
+
+void test_assistant_shell_activity_query_narrates_empty_results() {
+    namespace shell = life_orchestrator::app::assistant_shell;
+    const std::filesystem::path root = "artifacts/assistant_shell_activity_query_empty";
+    std::filesystem::remove_all(root);
+
+    shell::AssistantShellSurfaceService service(root, std::filesystem::current_path(), "");
+    service.StartOrResumeSession("session-activity-query-empty");
+    const auto result = service.SubmitUserText({"session-activity-query-empty", "procedural-list-activities"});
+    assert_true(result.ok, "empty activity listing query should succeed");
+    assert_true(result.turn_response.has_value(), "empty activity listing query should return a shell turn response");
+    assert_true(result.turn_response->runtime_outcome.kind == shell::AssistantShellRuntimeOutcome::Kind::QuerySucceeded, "empty activity listing should classify as a query success");
+    assert_true(result.turn_response->primary_narration_text.find("I completed that lookup.") == std::string::npos, "empty activity listing should not use the generic query fallback");
+    assert_true(result.turn_response->primary_narration_text.find("no activities recorded") != std::string::npos, "empty activity listing should narrate that no activities are recorded");
+}
+
 void test_assistant_shell_no_provider_remediation_and_redaction() {
     namespace shell = life_orchestrator::app::assistant_shell;
     const std::filesystem::path root = "artifacts/assistant_shell_no_provider";
@@ -1999,6 +2040,8 @@ int main() {
         test_assistant_shell_surface_contract_strings();
         test_assistant_shell_submission_routing_precedence();
         test_assistant_shell_confirmation_generation_and_acceptance();
+        test_assistant_shell_activity_query_narrates_returned_results();
+        test_assistant_shell_activity_query_narrates_empty_results();
         test_assistant_shell_no_provider_remediation_and_redaction();
         test_assistant_shell_session_persistence_and_reload();
         test_inference_transport_contracts_and_redaction();
