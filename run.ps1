@@ -44,7 +44,7 @@ $Target = 'life_orchestrator_app'
 $RunArgs = @($args)
 
 if ($args.Count -eq 0 -and $isWindowsHost) {
-    $Target = 'life_orchestrator_admin_gui'
+    $Target = 'life_orchestrator_assistant_shell'
     $RunArgs = @()
 }
 elseif ($args.Count -gt 0) {
@@ -150,6 +150,13 @@ if (-not $AppPath) {
         ($checkedPaths -join "`n")
     ))
     exit 1
+}
+
+$IsGuiTarget = $Target -eq 'life_orchestrator_assistant_shell' -or $Target -eq 'life_orchestrator_admin_gui'
+
+if ($isWindowsHost -and $IsGuiTarget) {
+    Start-Process -FilePath $AppPath -ArgumentList $RunArgs -WorkingDirectory $RepoRoot | Out-Null
+    exit 0
 }
 
 & $AppPath @RunArgs
