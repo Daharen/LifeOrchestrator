@@ -155,7 +155,15 @@ if (-not $AppPath) {
 $IsGuiTarget = $Target -eq 'life_orchestrator_assistant_shell' -or $Target -eq 'life_orchestrator_admin_gui'
 
 if ($isWindowsHost -and $IsGuiTarget) {
-    Start-Process -FilePath $AppPath -ArgumentList $RunArgs -WorkingDirectory $RepoRoot | Out-Null
+    $process = Start-Process -FilePath $AppPath -ArgumentList $RunArgs -WorkingDirectory $RepoRoot -PassThru
+    Start-Sleep -Milliseconds 750
+
+    if ($process.HasExited) {
+        $exitCode = $process.ExitCode
+        Write-Error "GUI target '$Target' exited immediately after launch. ExitCode=$exitCode AppPath=$AppPath"
+        exit 1
+    }
+
     exit 0
 }
 
