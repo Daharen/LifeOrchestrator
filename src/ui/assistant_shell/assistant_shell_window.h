@@ -20,10 +20,15 @@ public:
     int Run(HINSTANCE instance, int show_command);
 
 private:
+    enum class SurfaceLaunchOrigin {
+        MenuCommand
+    };
+
     static LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM w_param, LPARAM l_param);
     static LRESULT CALLBACK ComposerEditProc(HWND hwnd, UINT message, WPARAM w_param, LPARAM l_param);
 
     LRESULT HandleMessage(UINT message, WPARAM w_param, LPARAM l_param);
+    bool HandleMenuCommand(int id, UINT notification_code, LPARAM source_handle);
     void CreateUi();
     void InitializeShell();
     void Layout();
@@ -40,7 +45,7 @@ private:
     void ResolveConfirmation(bool accepted);
     void ToggleToolPanel();
     void ShowInfoDialog(const std::wstring& title, const std::string& body) const;
-    void OpenDeveloperLayer();
+    void OpenDeveloperLayer(SurfaceLaunchOrigin origin);
     void OpenConsole();
     void OpenProviderConfiguration();
     void ShowActiveModules();
