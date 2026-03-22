@@ -155,7 +155,18 @@ if (-not $AppPath) {
 $IsGuiTarget = $Target -eq 'life_orchestrator_assistant_shell' -or $Target -eq 'life_orchestrator_admin_gui'
 
 if ($isWindowsHost -and $IsGuiTarget) {
-    $process = Start-Process -FilePath $AppPath -ArgumentList $RunArgs -WorkingDirectory $RepoRoot -PassThru
+    $SanitizedRunArgs = @()
+    if ($null -ne $RunArgs) {
+        $SanitizedRunArgs = @($RunArgs | Where-Object { $null -ne $_ })
+    }
+
+    if ($SanitizedRunArgs.Count -gt 0) {
+        $process = Start-Process -FilePath $AppPath -ArgumentList $SanitizedRunArgs -WorkingDirectory $RepoRoot -PassThru
+    }
+    else {
+        $process = Start-Process -FilePath $AppPath -WorkingDirectory $RepoRoot -PassThru
+    }
+
     Start-Sleep -Milliseconds 750
 
     if ($process.HasExited) {
